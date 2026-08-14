@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0
+
+- Add `deploy/` reference (docker-compose service block, reverse-proxy site block,
+  hosts entries, example env files) for self-hosting one instance per Action1
+  organization.
+- Add a README disclaimer clarifying this is an independent, unofficial project.
+- Bump transitive dependencies (`hono`, `@hono/node-server`, `fast-uri`,
+  `ip-address`) to close known advisories; `npm audit --omit=dev` is clean.
+
 ## 0.1.0
 
 Initial release.

@@ -1,0 +1,16 @@
+# Paste this service into your fleet's docker-compose.yml, once per Action1
+# organization you want to expose. Requires an Action1 API client id/secret for that
+# organization (Action1 console -> Configuration -> Users & API Credentials).
+# Reuses the shared &mcp-service / &mcp-env anchors used across this fleet's other
+# MCP servers; adjust if you're deploying standalone.
+
+  mcp-action1-<company>:
+    <<: *mcp-service
+    image: ghcr.io/borgels/mcp-server-action1:latest
+    container_name: mcp-action1-<company>
+    env_file: [env/internal.env, env/action1-<company>.env]
+    environment:
+      <<: *mcp-env
+      ACTION1_AUDIT_LOG: /data/audit.jsonl
+    volumes:
+      - ./audit/action1-<company>:/data

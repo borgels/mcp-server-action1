@@ -1,0 +1,10 @@
+{
+  "_comment": "Merge into your gateway's hosts.json. Fill in the real Entra tenant GUID and the objectId of a security group (e.g. SG-MCP-action1-<company>) after creating + app-assigning it in that tenant, so the gateway can enforce group-based access to this endpoint.",
+  "action1.<company>.mcp.example.com": {
+    "tenant": "<tenant GUID>",
+    "upstream": "http://mcp-action1-<company>:3000/mcp",
+    "groupId": "<SG-MCP-action1-<company> objectId>",
+    "system": "action1",
+    "company": "<company>"
+  }
+}

@@ -1,6 +1,6 @@
 {
   "name": "mcp-server-action1",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server for the Action1 RMM / patch management API.",
   "type": "module",
   "main": "./dist/stdio.js",
