@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # Weekly rebuild of main without the layer cache, so fixes in the base image and OS
+  # packages land even when the code has not changed. Servers get them on their next pull.
+  schedule:
+    - cron: "0 3 * * 1"   # Monday 03:00 UTC
 
 permissions:
   contents: read
@@ -23,6 +27,8 @@ jobs:
         with:
           context: .
           push: true
+          pull: true
+          no-cache: ${{ github.event_name == 'schedule' }}
           labels: |
             org.opencontainers.image.source=https://github.com/borgels/mcp-server-action1
           tags: |
