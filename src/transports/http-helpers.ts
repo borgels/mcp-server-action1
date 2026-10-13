@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 export class HttpRequestError extends Error {
@@ -31,9 +32,47 @@ export function assertAuthorized(req: IncomingMessage, config = getHttpConfig())
     return;
   }
 
-  if (req.headers.authorization !== `Bearer ${config.httpToken}`) {
+  const header = req.headers.authorization ?? '';
+  if (!tokensEqual(header, `Bearer ${config.httpToken}`)) {
     throw new HttpRequestError(401, 'Unauthorized');
   }
+}
+
+/** Constant-time string comparison; both sides are hashed so lengths match. */
+export function tokensEqual(actual: string, expected: string): boolean {
+  const a = createHash('sha256').update(actual, 'utf8').digest();
+  const b = createHash('sha256').update(expected, 'utf8').digest();
+  return timingSafeEqual(a, b);
+}
+
+/**
+ * Trusting a forwarded user header is only safe when every request must also
+ * present MCP_HTTP_TOKEN (i.e. only the trusted proxy can reach the server).
+ * Throws when any of the given *_TRUST_FORWARDED_USER flags is enabled
+ * without a token, so the HTTP transport refuses to start.
+ */
+export function assertForwardedUserRequiresToken(
+  trustFlags: readonly string[],
+  config: Pick<HttpConfig, 'httpToken'> = getHttpConfig(),
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const enabled = trustFlags.filter(name => env[name] === 'true');
+  if (enabled.length && !config.httpToken) {
+    throw new Error(
+      `${enabled.join(', ')}=true requires MCP_HTTP_TOKEN to be set; refusing to start the HTTP server ` +
+        'because forwarded user headers could be spoofed by any client.',
+    );
+  }
+}
+
+/**
+ * Caller identity forwarded by the gateway in X-MCP-User, for audit logging
+ * only. Control characters are stripped and the value is length-capped.
+ */
+export function callerIdentity(req: IncomingMessage): string | undefined {
+  const raw = req.headers['x-mcp-user'];
+  const value = (Array.isArray(raw) ? raw[0] : raw)?.replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  return value ? value.slice(0, 256) : undefined;
 }
 
 export function assertAllowedOrigin(req: IncomingMessage): void {

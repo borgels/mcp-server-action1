@@ -35,6 +35,12 @@ npm test
 
 Docker images: `ghcr.io/borgels/mcp-server-action1` (published on push to `main`).
 
+## Security notes
+
+- Set `MCP_HTTP_TOKEN` for the HTTP transport; the bearer token is compared in constant time.
+- Caller-supplied ids are validated before they are placed in API paths (strict id / `CVE-YYYY-NNNN` patterns, no dot segments or separators), and every request URL must stay under the configured `ACTION1_BASE_URL` path.
+- Audit log entries (`ACTION1_AUDIT_LOG`) include a `caller` field taken from the `X-MCP-User` header when the gateway forwards one. It is informational and only trustworthy when the server is reachable solely through that gateway (use `MCP_HTTP_TOKEN`).
+
 ## Deploy
 
 See `deploy/` for the docker-compose service block, `hosts.json` entries, a reverse-proxy
