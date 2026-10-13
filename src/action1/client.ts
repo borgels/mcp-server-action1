@@ -51,6 +51,13 @@ export class Action1Client {
   buildUrl(path: string, query?: Record<string, QueryValue>): string {
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
     const url = new URL(`${this.baseUrl}${normalizedPath}`);
+    // Defence in depth: the resolved path must be exactly base path + the
+    // requested path. Dot segments or backslashes that the URL parser
+    // normalises away would change it and are refused here.
+    const basePath = new URL(this.baseUrl).pathname.replace(/\/+$/, '');
+    if (url.pathname !== `${basePath}${normalizedPath.split('?')[0]}` || !url.pathname.startsWith(`${basePath}/`)) {
+      throw new Error(`Refusing request to a path outside the Action1 API base: ${normalizedPath}`);
+    }
     for (const [key, value] of Object.entries(query ?? {})) {
       if (value === undefined || value === null || value === '') {
         continue;

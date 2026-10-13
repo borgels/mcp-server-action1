@@ -1,4 +1,5 @@
 import type { Action1Client, QueryValue } from './client.js';
+import { assertSafePathParam } from '../path-params.js';
 import { assertWritesEnabled } from './policy.js';
 
 /**
@@ -51,7 +52,31 @@ async function listPage(
   return withNextFrom(page, from);
 }
 
-const org = (orgId: string) => encodeURIComponent(orgId);
+/**
+ * Action1 ids (org/endpoint/group/package/report/automation/script) are
+ * alphanumeric with `_`, `-`, `+`, `~` and inner `.`; they never start with a dot, so
+ * dot segments like `..` can never reach the URL path.
+ */
+const ACTION1_ID = /^[A-Za-z0-9_+~-][A-Za-z0-9_.+~-]*$/;
+const CVE_ID = /^CVE-\d{4}-\d{4,}$/i;
+
+export function action1Id(value: string, name = 'id'): string {
+  assertSafePathParam(value, name);
+  if (!ACTION1_ID.test(value) || value.length > 200) {
+    throw new Error(`Invalid ${name}: expected letters, digits, '_', '-', '+', '~' or '.' (not leading).`);
+  }
+  return encodeURIComponent(value);
+}
+
+export function cveId(value: string): string {
+  assertSafePathParam(value, 'cveId');
+  if (!CVE_ID.test(value)) {
+    throw new Error('Invalid cveId: expected the form CVE-YYYY-NNNN.');
+  }
+  return encodeURIComponent(value);
+}
+
+const org = (orgId: string) => action1Id(orgId, 'orgId');
 
 // --- Organizations ---
 
@@ -88,7 +113,7 @@ export async function getEndpoint(
   client: Action1Client,
   input: { orgId: string; endpointId: string; includeMissingUpdates?: boolean },
 ): Promise<unknown> {
-  const base = `/endpoints/managed/${org(input.orgId)}/${encodeURIComponent(input.endpointId)}`;
+  const base = `/endpoints/managed/${org(input.orgId)}/${action1Id(input.endpointId, 'endpointId')}`;
   if (input.includeMissingUpdates) {
     const [endpoint, missingUpdates] = await Promise.all([
       client.get(base),
@@ -105,7 +130,7 @@ export async function listEndpointGroups(
 ): Promise<unknown> {
   const base = `/endpoints/groups/${org(input.orgId)}`;
   if (input.groupId) {
-    const groupPath = `${base}/${encodeURIComponent(input.groupId)}`;
+    const groupPath = `${base}/${action1Id(input.groupId, 'groupId')}`;
     return input.contents ? listPage(client, `${groupPath}/contents`, input) : client.get(groupPath);
   }
   return listPage(client, base, input);
@@ -126,7 +151,7 @@ export interface ListUpdatesInput extends PageInput {
 
 export async function listUpdates(client: Action1Client, input: ListUpdatesInput): Promise<unknown> {
   if (input.packageId) {
-    return client.get(`/updates/${org(input.orgId)}/${encodeURIComponent(input.packageId)}`);
+    return client.get(`/updates/${org(input.orgId)}/${action1Id(input.packageId, 'packageId')}`);
   }
   return listPage(client, `/updates/${org(input.orgId)}`, input, {
     approval_status: input.approvalStatus,
@@ -166,7 +191,7 @@ export interface ListVulnerabilitiesInput extends PageInput {
 export async function listVulnerabilities(client: Action1Client, input: ListVulnerabilitiesInput): Promise<unknown> {
   const base = `/vulnerabilities/${org(input.orgId)}`;
   if (input.cveId) {
-    const cvePath = `${base}/${encodeURIComponent(input.cveId)}`;
+    const cvePath = `${base}/${cveId(input.cveId)}`;
     if (input.detail) {
       return listPage(client, `${cvePath}/${input.detail}`, input);
     }
@@ -187,7 +212,7 @@ export async function getInstalledSoftware(
 ): Promise<unknown> {
   const base = `/installed-software/${org(input.orgId)}/data`;
   if (input.endpointId) {
-    return listPage(client, `${base}/${encodeURIComponent(input.endpointId)}`, input);
+    return listPage(client, `${base}/${action1Id(input.endpointId, 'endpointId')}`, input);
   }
   return listPage(client, base, input);
 }
@@ -198,7 +223,7 @@ export async function listSoftwareRepository(
 ): Promise<unknown> {
   const base = `/software-repository/${org(input.orgId)}`;
   if (input.packageId) {
-    return client.get(`${base}/${encodeURIComponent(input.packageId)}`);
+    return client.get(`${base}/${action1Id(input.packageId, 'packageId')}`);
   }
   return listPage(client, base, input);
 }
@@ -208,7 +233,7 @@ export async function listScripts(
   input: { scriptId?: string } & PageInput = {},
 ): Promise<unknown> {
   if (input.scriptId) {
-    return client.get(`/scripts/all/${encodeURIComponent(input.scriptId)}`);
+    return client.get(`/scripts/all/${action1Id(input.scriptId, 'scriptId')}`);
   }
   return listPage(client, '/scripts/all', input);
 }
@@ -225,7 +250,7 @@ export interface ListAutomationsInput extends PageInput {
 export async function listAutomations(client: Action1Client, input: ListAutomationsInput): Promise<unknown> {
   const base = `/automations/${input.kind}/${org(input.orgId)}`;
   if (input.automationId) {
-    const itemPath = `${base}/${encodeURIComponent(input.automationId)}`;
+    const itemPath = `${base}/${action1Id(input.automationId, 'automationId')}`;
     if (input.endpointResults && input.kind === 'instances') {
       return listPage(client, `${itemPath}/endpoint-results`, input);
     }
@@ -244,7 +269,7 @@ export async function getReportData(
   client: Action1Client,
   input: { orgId: string; reportId: string } & PageInput,
 ): Promise<unknown> {
-  return listPage(client, `/reportdata/${org(input.orgId)}/${encodeURIComponent(input.reportId)}/data`, input);
+  return listPage(client, `/reportdata/${org(input.orgId)}/${action1Id(input.reportId, 'reportId')}/data`, input);
 }
 
 // --- Audit ---

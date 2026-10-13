@@ -4,6 +4,7 @@ import { createServer as createMcpServer } from '../server.js';
 import {
   assertAllowedOrigin,
   assertAuthorized,
+  callerIdentity,
   corsHeaders,
   getHttpConfig,
   HttpRequestError,
@@ -35,7 +36,7 @@ const httpServer = createNodeServer(async (req, res) => {
 
     assertAuthorized(req, config);
     const body = await readJsonBody(req, config.maxBodyBytes);
-    const mcpServer = createMcpServer();
+    const mcpServer = createMcpServer({ caller: callerIdentity(req) });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     });

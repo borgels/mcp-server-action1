@@ -4,6 +4,8 @@ import { formatUnknownError } from '../errors.js';
 
 export interface Action1AuditEvent {
   requestId?: string;
+  /** Caller identity as forwarded by the gateway (X-MCP-User), if any. */
+  caller?: string;
   tool: string;
   action: 'start' | 'finish' | 'error' | 'policy_denied';
   target?: unknown;
@@ -21,6 +23,7 @@ export async function writeAuditEvent(event: Action1AuditEvent): Promise<void> {
   const record = {
     timestamp: new Date().toISOString(),
     requestId: event.requestId ?? randomUUID(),
+    caller: event.caller,
     tool: event.tool,
     action: event.action,
     targetHash: event.target === undefined ? undefined : hashValue(JSON.stringify(event.target)),

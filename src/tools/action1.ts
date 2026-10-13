@@ -35,7 +35,18 @@ const pageShape = {
   filter: z.string().trim().optional().describe('Case-insensitive substring matched against any field.'),
 };
 
-export function registerAction1Tools(server: McpServer, client: Action1Client): void {
+export interface RegisterToolsOptions {
+  caller?: string;
+}
+
+export function registerAction1Tools(
+  server: McpServer,
+  client: Action1Client,
+  options: RegisterToolsOptions = {},
+): void {
+  const runAuditedTool = <T>(tool: string, input: unknown, call: () => Promise<T>): Promise<T> =>
+    runAuditedToolAs(options.caller, tool, input, call);
+
   server.registerTool(
     'action1_search_capabilities',
     {
@@ -309,23 +320,29 @@ export function registerAction1Tools(server: McpServer, client: Action1Client): 
   );
 }
 
-async function runAuditedTool<T>(tool: string, input: unknown, call: () => Promise<T>): Promise<T> {
+async function runAuditedToolAs<T>(
+  caller: string | undefined,
+  tool: string,
+  input: unknown,
+  call: () => Promise<T>,
+): Promise<T> {
   const policy = checkToolPolicy(tool);
   const target = auditTarget(input);
 
   if (!policy.allowed) {
-    await writeAuditEvent({ tool, action: 'policy_denied', target, reason: policy.reason });
+    await writeAuditEvent({ caller, tool, action: 'policy_denied', target, reason: policy.reason });
     throw new Error(policy.reason);
   }
 
-  await writeAuditEvent({ tool, action: 'start', target, reason: policy.reason });
+  await writeAuditEvent({ caller, tool, action: 'start', target, reason: policy.reason });
 
   try {
     const result = await call();
-    await writeAuditEvent({ tool, action: 'finish', target, status: 'ok' });
+    await writeAuditEvent({ caller, tool, action: 'finish', target, status: 'ok' });
     return result;
   } catch (error) {
     await writeAuditEvent({
+      caller,
       tool,
       action: 'error',
       target,
