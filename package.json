@@ -1,6 +1,7 @@
 {
   "name": "mcp-server-action1",
   "version": "0.3.0",
+  "mcpName": "io.github.borgels/mcp-server-action1",
   "description": "MCP server for the Action1 RMM / patch management API.",
   "type": "module",
   "main": "./dist/stdio.js",

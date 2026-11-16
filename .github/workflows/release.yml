@@ -1,0 +1,104 @@
+name: Release
+
+# Push a tag like `v1.2.3` (matching package.json) to publish that version to
+# npm and the MCP Registry. Both authenticate with the job's GitHub OIDC token;
+# no secrets are stored.
+#
+# - npm: trusted publishing for this repository and this workflow file
+#   (release.yml) must be configured on npmjs.com. Requires npm >= 11.5.1 and
+#   Node >= 22.14. Provenance is attached.
+# - MCP Registry: `mcp-publisher login github-oidc` grants the namespace of
+#   the repository owner (io.github.borgels/*). server.json is validated
+#   before anything is published.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NPM_VERSION: 11.21.2
+      MCP_PUBLISHER_VERSION: v1.8.9
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # No `registry-url`: with it, setup-node writes an .npmrc containing
+      # `_authToken=${NODE_AUTH_TOKEN}`, and the empty token makes npm fail
+      # with 401 before it tries OIDC.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Check tag, package.json and server.json versions
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          node -e '
+            const tag = process.argv[1];
+            const pkg = require("./package.json");
+            const srv = require("./server.json");
+            const versions = { "package.json": pkg.version, "server.json": srv.version, "server.json packages[0]": srv.packages[0].version };
+            const bad = Object.entries(versions).filter(([, v]) => v !== tag);
+            if (bad.length) {
+              for (const [file, v] of bad) console.error(`::error::${file} version ${v} does not match tag ${tag}`);
+              process.exit(1);
+            }
+          ' "$TAG_VERSION"
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Download and verify mcp-publisher
+        run: |
+          set -euo pipefail
+          archive="mcp-publisher_linux_amd64.tar.gz"
+          base_url="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
+          curl --fail --location --silent --show-error --output "$RUNNER_TEMP/$archive" "$base_url/$archive"
+          curl --fail --location --silent --show-error --output "$RUNNER_TEMP/$archive.sigstore.json" "$base_url/$archive.sigstore.json"
+          cosign verify-blob \
+            --bundle "$RUNNER_TEMP/$archive.sigstore.json" \
+            --certificate-identity "https://github.com/modelcontextprotocol/registry/.github/workflows/release.yml@refs/tags/${MCP_PUBLISHER_VERSION}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$RUNNER_TEMP/$archive"
+          tar xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" mcp-publisher
+
+      - name: Validate server.json
+        run: '"$RUNNER_TEMP/mcp-publisher" validate server.json'
+
+      # npm requires an explicit dist-tag for pre-release versions.
+      - name: Publish to npm
+        run: |
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            npx --yes "npm@${NPM_VERSION}" publish --provenance --access public --tag next
+          else
+            npx --yes "npm@${NPM_VERSION}" publish --provenance --access public
+          fi
+
+      # The registry reads mcpName from the published npm package.
+      - name: Publish to the MCP Registry
+        run: |
+          spec="$(node -p 'const p = require("./package.json"); `${p.name}@${p.version}`')"
+          for i in $(seq 1 12); do
+            npm view "$spec" mcpName >/dev/null 2>&1 && break
+            echo "Waiting for $spec on npm ($i)"
+            sleep 10
+          done
+          "$RUNNER_TEMP/mcp-publisher" login github-oidc
+          "$RUNNER_TEMP/mcp-publisher" publish server.json
