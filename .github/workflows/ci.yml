@@ -23,6 +23,53 @@ jobs:
       - run: npm run build
       - run: npm audit --omit=dev --audit-level=high
 
+  server-json:
+    runs-on: ubuntu-latest
+    env:
+      # Pinned; bumped by hand together with release.yml.
+      MCP_PUBLISHER_VERSION: v1.8.9
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Check server.json matches package.json
+        run: |
+          node -e '
+            const pkg = require("./package.json");
+            const srv = require("./server.json");
+            const npm = srv.packages.find((p) => p.registryType === "npm") ?? {};
+            const checks = [
+              ["package.json mcpName", pkg.mcpName, srv.name],
+              ["server.json version", srv.version, pkg.version],
+              ["npm package identifier", npm.identifier, pkg.name],
+              ["npm package version", npm.version, pkg.version],
+            ];
+            const bad = checks.filter(([, actual, expected]) => actual !== expected);
+            for (const [what, actual, expected] of bad) console.error(`::error::${what} is ${actual}, expected ${expected}`);
+            process.exit(bad.length ? 1 : 0);
+          '
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Download and verify mcp-publisher
+        run: |
+          set -euo pipefail
+          archive="mcp-publisher_linux_amd64.tar.gz"
+          base_url="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
+          curl --fail --location --silent --show-error --output "$RUNNER_TEMP/$archive" "$base_url/$archive"
+          curl --fail --location --silent --show-error --output "$RUNNER_TEMP/$archive.sigstore.json" "$base_url/$archive.sigstore.json"
+          cosign verify-blob \
+            --bundle "$RUNNER_TEMP/$archive.sigstore.json" \
+            --certificate-identity "https://github.com/modelcontextprotocol/registry/.github/workflows/release.yml@refs/tags/${MCP_PUBLISHER_VERSION}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$RUNNER_TEMP/$archive"
+          tar xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" mcp-publisher
+      # Checks the schema and the registry's semantic rules.
+      - name: Validate server.json
+        run: '"$RUNNER_TEMP/mcp-publisher" validate server.json'
+
   image:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest

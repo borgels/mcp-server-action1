@@ -1,0 +1,52 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.borgels/mcp-server-action1",
+  "title": "Action1",
+  "description": "MCP server for the Action1 RMM / patch management API.",
+  "repository": {
+    "url": "https://github.com/borgels/mcp-server-action1",
+    "source": "github"
+  },
+  "version": "0.3.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "mcp-server-action1",
+      "version": "0.3.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "ACTION1_CLIENT_ID",
+          "description": "API client id (Configuration, Users & API Credentials).",
+          "isRequired": true
+        },
+        {
+          "name": "ACTION1_CLIENT_SECRET",
+          "description": "API client secret.",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "ACTION1_BASE_URL",
+          "description": "Region base URL (EU, NA or AU).",
+          "default": "https://app.eu.action1.com/api/3.0"
+        },
+        {
+          "name": "ACTION1_ENABLE_WRITES",
+          "description": "Enable the patch approval write tool.",
+          "format": "boolean",
+          "default": "false"
+        },
+        {
+          "name": "ACTION1_AUDIT_LOG",
+          "description": "Path of the JSONL audit log.",
+          "format": "filepath"
+        }
+      ]
+    }
+  ]
+}

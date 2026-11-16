@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Published to npm and the MCP Registry from tagged releases.
+
 ## 0.3.0
 
 ### Upgrade notes

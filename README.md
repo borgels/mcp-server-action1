@@ -25,6 +25,14 @@ OAuth2 client-credentials against `{base}/oauth2/token`; tokens live exactly 360
 
 Lists return `{items, total_items, from, nextFrom}` — pass `nextFrom` as `from` to continue. Action1 recommends staying under ~30 requests/minute per enterprise; 429 responses surface `retry-after`.
 
+## Install
+
+```bash
+npx mcp-server-action1
+```
+
+Runs the stdio server from npm. Configure it with the environment variables in `.env.example`.
+
 ## Run
 
 ```bash
