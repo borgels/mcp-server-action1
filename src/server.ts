@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Action1Client, type Action1ClientOptions } from './action1/client.js';
 import { registerAction1Tools } from './tools/action1.js';
+import { PACKAGE_VERSION } from './version.js';
 
 export interface CreateServerOptions {
   client?: Action1Client;
@@ -12,7 +13,7 @@ export interface CreateServerOptions {
 export function createServer(options: CreateServerOptions = {}): McpServer {
   const server = new McpServer({
     name: 'action1',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
   });
 
   const client = options.client ?? new Action1Client(options.clientOptions);
