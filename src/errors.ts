@@ -66,9 +66,21 @@ function formatAction1HttpError(input: {
     payload?.message,
     input.retryAfter ? `retry-after=${input.retryAfter}s` : undefined,
     input.fallbackMessage,
-  ].filter(Boolean);
+  ].map(part => (typeof part === 'string' ? truncateRedacted(part) : part)).filter(Boolean);
 
   return redactSecrets(parts.join(' | '));
+}
+
+/** Upstream error text included in a message is cut to this length, after redaction. */
+export const MAX_ERROR_TEXT = 500;
+
+/** Redacts first, then truncates, so a cut can never expose part of a secret. */
+function truncateRedacted(value: string | undefined): string | undefined {
+  if (!value) {
+    return value;
+  }
+  const redacted = redactSecrets(value);
+  return redacted.length > MAX_ERROR_TEXT ? `${redacted.slice(0, MAX_ERROR_TEXT)}... [truncated]` : redacted;
 }
 
 function isAction1ErrorPayload(value: unknown): value is Action1ErrorPayload {

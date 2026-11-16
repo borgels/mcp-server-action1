@@ -4,7 +4,7 @@ import { formatUnknownError } from '../errors.js';
 
 export interface Action1AuditEvent {
   requestId?: string;
-  /** Caller identity as forwarded by the gateway (X-MCP-User), if any. */
+  /** Caller identity as forwarded by an upstream gateway (X-MCP-User), if any. */
   caller?: string;
   tool: string;
   action: 'start' | 'finish' | 'error' | 'policy_denied';

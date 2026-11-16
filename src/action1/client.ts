@@ -1,3 +1,4 @@
+import { type Env, readEnvInteger } from '../config-env.js';
 import { Action1HttpError } from '../errors.js';
 
 export interface Action1ClientOptions {
@@ -10,8 +11,16 @@ export interface Action1ClientOptions {
 
 export type QueryValue = string | number | boolean | null | undefined;
 
-/** Region base URLs; ours is Europe. NA: app.action1.com, AU: app.au.action1.com. */
+/** Region base URLs; the default is Europe. NA: app.action1.com, AU: app.au.action1.com. */
 const DEFAULT_BASE_URL = 'https://app.eu.action1.com/api/3.0';
+
+/** Error bodies are read up to this many bytes. */
+const MAX_ERROR_BODY_BYTES = 64 * 1024;
+
+/** ACTION1_TIMEOUT_MS, validated (1 ms to 10 minutes); throws ConfigError on invalid values. */
+export function action1EnvTimeoutMs(env: Env = process.env): number {
+  return readEnvInteger('ACTION1_TIMEOUT_MS', 30_000, { min: 1, max: 600_000 }, env);
+}
 
 /** Refresh the token a minute before its fixed 3600 s expiry. */
 const TOKEN_SAFETY_MARGIN_MS = 60_000;
@@ -37,7 +46,7 @@ export class Action1Client {
     this.baseUrl = trimTrailingSlash(options.baseUrl ?? process.env.ACTION1_BASE_URL ?? DEFAULT_BASE_URL);
     assertSafeBaseUrl(this.baseUrl);
     this.fetchImpl = options.fetchImpl ?? fetch;
-    this.timeoutMs = options.timeoutMs ?? Number(process.env.ACTION1_TIMEOUT_MS ?? 30_000);
+    this.timeoutMs = options.timeoutMs ?? action1EnvTimeoutMs();
   }
 
   async get<T>(path: string, query?: Record<string, QueryValue>): Promise<T> {
@@ -81,10 +90,13 @@ export class Action1Client {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ client_id: this.clientId, client_secret: this.clientSecret }).toString(),
+      // A 307/308 would re-send client_secret to the redirect target.
+      redirect: 'manual',
       signal: AbortSignal.timeout(this.timeoutMs),
     });
+    assertNotRedirect(response, url);
 
-    const body = (await readResponseBody(response)) as
+    const body = (response.ok ? await readResponseBody(response) : await readErrorBody(response)) as
       | { access_token?: string; expires_in?: number }
       | null;
 
@@ -118,6 +130,8 @@ export class Action1Client {
     const init: RequestInit = {
       method,
       headers,
+      // Never follow redirects with the bearer token.
+      redirect: 'manual',
       signal: AbortSignal.timeout(this.timeoutMs),
     };
 
@@ -130,10 +144,13 @@ export class Action1Client {
 
     // A 401 can mean the cached token was revoked server-side — refetch once.
     if (response.status === 401 && this.accessToken) {
+      // Release the first response's connection before retrying.
+      void response.body?.cancel().catch(() => undefined);
       this.accessToken = undefined;
       const retryToken = await this.getToken();
       headers.Authorization = `Bearer ${retryToken}`;
-      const retried = await this.fetchImpl(url, init);
+      // The retry gets its own timeout instead of what is left of the first one.
+      const retried = await this.fetchImpl(url, { ...init, signal: AbortSignal.timeout(this.timeoutMs) });
       return this.finish<T>(retried, url);
     }
 
@@ -141,7 +158,8 @@ export class Action1Client {
   }
 
   private async finish<T>(response: Response, url: string): Promise<T> {
-    const responseBody = await readResponseBody(response);
+    assertNotRedirect(response, url);
+    const responseBody = response.ok ? await readResponseBody(response) : await readErrorBody(response);
 
     if (!response.ok) {
       throw new Action1HttpError({
@@ -166,6 +184,55 @@ async function readResponseBody(response: Response): Promise<unknown> {
     return JSON.parse(text) as unknown;
   } catch {
     return text;
+  }
+}
+
+/** Error bodies are read up to MAX_ERROR_BODY_BYTES; JSON is parsed only when complete. */
+async function readErrorBody(response: Response): Promise<unknown> {
+  if (!response.body) {
+    return null;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let exceeded = false;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    if (total + value.byteLength > MAX_ERROR_BODY_BYTES) {
+      chunks.push(value.subarray(0, MAX_ERROR_BODY_BYTES - total));
+      exceeded = true;
+      await reader.cancel().catch(() => undefined);
+      break;
+    }
+    chunks.push(value);
+    total += value.byteLength;
+  }
+  const text = Buffer.concat(chunks).toString('utf8');
+  if (!text) {
+    return null;
+  }
+  if (exceeded) {
+    return text;
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+/** Redirects are not followed (see `redirect: 'manual'`); report them as an error. */
+function assertNotRedirect(response: Response, url: string): void {
+  if (response.status >= 300 && response.status < 400 && response.status !== 304) {
+    void response.body?.cancel().catch(() => undefined);
+    throw new Action1HttpError({
+      status: response.status,
+      url,
+      fallbackMessage: 'Action1 API responded with a redirect; redirects are not followed.',
+    });
   }
 }
 

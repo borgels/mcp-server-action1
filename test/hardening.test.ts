@@ -81,3 +81,40 @@ describe('audit caller identity', () => {
     expect(lines.every(l => l.caller === 'alice@example.com')).toBe(true);
   });
 });
+
+describe('Action1 token refresh on 401', () => {
+  it('cancels the first response body and gives the retry its own timeout', async () => {
+    const signals: AbortSignal[] = [];
+    let cancelled = false;
+    let tokens = 0;
+    let dataCalls = 0;
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/oauth2/token')) {
+        tokens += 1;
+        return new Response(JSON.stringify({ access_token: `t${tokens}`, expires_in: 3600 }), { status: 200 });
+      }
+      signals.push(init?.signal as AbortSignal);
+      dataCalls += 1;
+      if (dataCalls === 1) {
+        const body = new ReadableStream({
+          cancel() {
+            cancelled = true;
+          },
+        });
+        return new Response(body, { status: 401 });
+      }
+      expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer t2');
+      return new Response(JSON.stringify({ items: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const client = new Action1Client({ clientId: 'id', clientSecret: 's', fetchImpl, timeoutMs: 5_000 });
+    await expect(client.get('/organizations')).resolves.toEqual({ items: [] });
+    expect(dataCalls).toBe(2);
+    expect(tokens).toBe(2);
+    expect(cancelled).toBe(true);
+    expect(signals[0]).toBeDefined();
+    expect(signals[1]).toBeDefined();
+    expect(signals[1]).not.toBe(signals[0]);
+  });
+});
