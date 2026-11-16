@@ -144,10 +144,13 @@ export class Action1Client {
 
     // A 401 can mean the cached token was revoked server-side — refetch once.
     if (response.status === 401 && this.accessToken) {
+      // Release the first response's connection before retrying.
+      void response.body?.cancel().catch(() => undefined);
       this.accessToken = undefined;
       const retryToken = await this.getToken();
       headers.Authorization = `Bearer ${retryToken}`;
-      const retried = await this.fetchImpl(url, init);
+      // The retry gets its own timeout instead of what is left of the first one.
+      const retried = await this.fetchImpl(url, { ...init, signal: AbortSignal.timeout(this.timeoutMs) });
       return this.finish<T>(retried, url);
     }
 

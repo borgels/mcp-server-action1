@@ -26,6 +26,8 @@
   `client_secret` cannot be re-sent to another host.
 - Upstream error bodies are read up to 64 KB; error text is redacted before it is
   truncated.
+- The one retry after a `401` (token refresh) releases the first response and gets
+  its own timeout.
 - The server reports the package version (it reported `0.1.0`).
 - Removed an unused forwarded-user helper.
 - Docker image is published only after CI passes, with SBOM and provenance; GitHub
