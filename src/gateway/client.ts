@@ -125,7 +125,11 @@ export class Action1GatewayClient {
   private readonly redactWhole: (value: string) => void;
   private readonly fetchImpl: typeof fetch;
   /** The access token, in a box shared with every view of this client (a read tool's view keeps the same token). */
-  private readonly tokenBox: { token?: { value: string; expiresAt: number }; unsafe?: boolean } = {};
+  private readonly tokenBox: {
+    token?: { value: string; expiresAt: number };
+    pending?: Promise<{ value: string; expiresAt: number }>;
+    unsafe?: boolean;
+  } = {};
 
   constructor(options: Action1GatewayClientOptions) {
     this.clientId = options.clientId;
@@ -165,7 +169,12 @@ export class Action1GatewayClient {
     if (this.tokenBox.unsafe) throw new Error(UNSAFE_TOKEN);
     const kept = this.tokenBox.token;
     if (kept && Date.now() < kept.expiresAt - TOKEN_MARGIN_MS) return kept.value;
-    const issued = await this.issueToken();
+    // One token request at a time per instance: calls made meanwhile wait for the same answer.
+    this.tokenBox.pending ??= this.issueToken().finally(() => {
+      this.tokenBox.pending = undefined;
+    });
+    const issued = await this.tokenBox.pending;
+    if (this.tokenBox.unsafe) throw new Error(UNSAFE_TOKEN);
     this.tokenBox.token = issued;
     return issued.value;
   }
@@ -223,7 +232,12 @@ export class Action1GatewayClient {
       headers['Content-Type'] = 'application/json';
       init.body = JSON.stringify(body);
     }
+    if (this.tokenBox.unsafe) throw new Error(UNSAFE_TOKEN);
     const response = await this.send(url, init, method);
+    if (this.tokenBox.unsafe) {
+      await discard(response);
+      throw new Error(UNSAFE_TOKEN);
+    }
     if (!response.ok) {
       // The body is never read: Action1's text never becomes part of an error.
       await discard(response);
@@ -233,7 +247,10 @@ export class Action1GatewayClient {
         wholeNumber(response.headers.get('retry-after')),
       );
     }
-    return (await this.readJson(response, method)) as T;
+    const data = await this.readJson(response, method);
+    // Closed while the answer was read: it is not passed on.
+    if (this.tokenBox.unsafe) throw new Error(UNSAFE_TOKEN);
+    return data as T;
   }
 
   /** One request: no redirect followed, our time limit, a network failure in our own words. */

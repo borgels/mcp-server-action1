@@ -393,6 +393,40 @@ describe('Action1 gateway access tokens', () => {
     }
   });
 
+  it('makes one token request for calls at the same time, and passes nothing on once a token closed the instance', async () => {
+    const colliding = 'zz-credential-of-this-zz';
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    let tokens = 0;
+    const fetchImpl = action1({
+      'POST /oauth2/token': () => {
+        tokens += 1;
+        return json({ access_token: tokens === 1 ? colliding : ACCESS_TOKEN });
+      },
+      'GET /organizations': () => json({ total_items: 1, items: [{ id: 'org-1', name: colliding }] }),
+    });
+    const slow: typeof fetch = async (url, init) => {
+      if (String(url).endsWith('/oauth2/token')) await gate;
+      return fetchImpl(url, init);
+    };
+    const g = gateway(slow);
+    const both = Promise.all([g.callTool('list_organizations', {}), g.callTool('list_organizations', {}), g.callTool('list_endpoints', { orgId: 'org-1' })]);
+    for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+    release();
+    for (const result of await both) {
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).not.toContain(colliding);
+    }
+    expect(tokens).toBe(1);
+    expect(fetchImpl.mock.calls.filter(([url]) => !String(url).endsWith('/oauth2/token'))).toEqual([]);
+
+    // Concurrent reads on a good token share one token request too.
+    const good = action1();
+    const h = gateway(good);
+    await Promise.all([h.callTool('list_organizations', {}), h.callTool('list_reports', {}), h.callTool('check_connection', {})]);
+    expect(good.mock.calls.filter(([url]) => String(url).endsWith('/oauth2/token'))).toHaveLength(1);
+  });
+
   it('never passes on a refresh token issued without an access token, nor an echo of an encoded token or client id', async () => {
     const refresh = 'rf9Xw2Lk5Pm8Qa3Zt6Yb';
     let first = true;
