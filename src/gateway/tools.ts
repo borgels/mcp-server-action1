@@ -220,7 +220,7 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = defineTools([
     name: 'get_report_data',
     title: 'Get Action1 report data',
     description:
-      'The rows of one report for an organization. Only the inventory, update and vulnerability columns are returned, never another column, and never a value that looks like a mail, IP or MAC address.',
+      'The rows of one report for an organization. Only the inventory, update and vulnerability columns are returned, never another column, and never a value that looks like a mail, IP or MAC address (in a version column, four numbers with dots are kept as a version).',
     riskLevel: 'read',
     summary: 'Action1 report data.',
     upstream: [TOKEN, get('/reportdata/{orgId}/{reportId}/data')],

@@ -102,7 +102,7 @@ Tools (reads are enabled by default, the one write is not):
 | `list_updates` | read | Missing updates with versions, severity, approval status and patch deadline. No install switches or binaries. |
 | `list_vulnerabilities` | read | CVEs with score, CISA KEV, remediation status, affected software; affected computers; recorded remediations (who by display name only). |
 | `get_installed_software` | read | Name, vendor, version, platform, number of computers, update status. |
-| `list_reports`, `get_report_data` | read | Reports and their rows: only named inventory, update and vulnerability columns, and never a value that looks like a mail, IP or MAC address. |
+| `list_reports`, `get_report_data` | read | Reports and their rows: only named inventory, update and vulnerability columns, and never a value that looks like a mail, IP or MAC address (a version column keeps four numbers with dots as a version). |
 | `set_update_approvals` | write | Approve, decline or reset to New update versions in one organization (never `all`). Nothing is installed by the call. |
 
 Nothing in the gateway runs scripts, installs or removes software, reboots machines, opens remote sessions or deletes; scripts, automations, the software repository and the audit log are not offered.

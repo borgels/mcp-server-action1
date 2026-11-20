@@ -384,6 +384,29 @@ describe('Action1 gateway access tokens', () => {
     expect(refused.isError).toBe(true);
     expect(refused.content[0]!.text).toMatch(/cannot be kept apart/);
     expect(always.mock.calls.filter(([url]) => !String(url).endsWith('/oauth2/token'))).toEqual([]);
+
+    // Nor in an encoded form: URL-encoded or JSON-escaped, for a dropped token and for the client id.
+    const odd = 'zz+credential-of-this/zz"q';
+    let third = 0;
+    const encoded = action1({
+      'POST /oauth2/token': () => json({ access_token: third++ === 0 ? odd : ACCESS_TOKEN }),
+      'GET /organizations': () =>
+        json({ total_items: 1, items: [{ id: 'org-1', name: encodeURIComponent(odd), description: `${JSON.stringify(odd).slice(1, -1)} ${encodeURIComponent(CLIENT_ID)}` }] }),
+    });
+    const text = JSON.stringify(await gateway(encoded).callTool('list_organizations', {}));
+    for (const form of [encodeURIComponent(odd), encodeURIComponent(CLIENT_ID), 'credential-of-this/zz']) expect(text).not.toContain(form);
+  });
+
+  it('never uses a token too short to be redacted by its pieces, and never passes it on', async () => {
+    const short = action1({
+      'POST /oauth2/token': () => json({ access_token: 'k7Qz2' }),
+      'GET /organizations': () => json({ total_items: 1, items: [{ id: 'org-1', name: 'k7Qz2' }] }),
+    });
+    const result = await gateway(short).callTool('list_organizations', {});
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('k7Qz2');
+    expect(short.mock.calls.filter(([url]) => !String(url).endsWith('/oauth2/token'))).toEqual([]);
+
   });
 });
 

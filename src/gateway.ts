@@ -243,8 +243,16 @@ class InstanceRedactor extends SecretRedactor {
     super();
     this.addWhole(clientId);
   }
+  /** The value as a whole, raw, URL-encoded and JSON-escaped, like a secret's own forms (src/upstream-http.ts). */
   addWhole(value: string): this {
-    if (value.length >= 8) this.whole.add(value);
+    if (value.length < 4) return this;
+    let encoded = value;
+    try {
+      encoded = encodeURIComponent(value);
+    } catch {
+      // A lone surrogate has no URL-encoded form; the other forms are still added.
+    }
+    for (const form of [value, encoded, JSON.stringify(value).slice(1, -1)]) this.whole.add(form);
     return this;
   }
   override redact(value: string): string {

@@ -27,6 +27,8 @@ const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
 const MAX_TIMEOUT_MS = 10 * 60 * 1000;
 /** A token is fetched again this long before Action1 says it expires. */
 const TOKEN_MARGIN_MS = 60_000;
+/** Issued tokens shorter than this are not used: the redactor matches pieces of 6 only in values of 8 or more. */
+const MIN_TOKEN_LENGTH = 16;
 
 export type QueryValue = string | number | boolean | null | undefined;
 
@@ -194,6 +196,11 @@ export class Action1GatewayClient {
     const issued = [body?.access_token, body?.refresh_token].filter((value): value is string => typeof value === 'string' && value !== '');
     if (typeof body?.access_token !== 'string' || body.access_token === '') {
       throw new Error('Action1 did not issue an access token.');
+    }
+    // A token too short to be redacted by its pieces is never used; it is still redacted as a whole value.
+    if (issued.some(token => token.length < MIN_TOKEN_LENGTH)) {
+      for (const token of issued) this.redactWhole(token);
+      throw new Error('Action1 issued an access token too short to be kept safe; it was not used.');
     }
     // A token that shares a piece with the fixed fallbacks is dropped unused. Should Action1 still echo it, it is
     // redacted as a whole value (its pieces are text of ours, so they cannot be).
