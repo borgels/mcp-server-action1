@@ -68,6 +68,45 @@ startup; an invalid value stops the server with a message naming the variable.
 - API and token requests never follow HTTP redirects, so the bearer token and `client_secret` are only sent to `ACTION1_BASE_URL`. Upstream error bodies are read up to 64 KB and redacted before they are truncated.
 - Audit log entries (`ACTION1_AUDIT_LOG`) include a `caller` field taken from the `X-MCP-User` header when an upstream gateway forwards one. It is informational and only trustworthy when the server is reachable solely through that gateway (use `MCP_HTTP_TOKEN`).
 
+## Embedding (`./gateway`)
+
+The package also exports an embeddable gateway for hosts (such as an MCP gateway with its own per-user authorization) that run one instance per tenant in one process:
+
+```ts
+import { createAction1Gateway, action1ToolCatalog } from 'mcp-server-action1/gateway';
+
+const gateway = createAction1Gateway({
+  clientId,          // the API client id (Action1 shows it as an e-mail-like id)
+  clientSecret,      // the API client secret
+  region: 'eu',      // eu | na | na2 | uk | au: one of Action1's fixed API addresses
+  policy: { enableWrites: false, disabledTools: [], audit: record => log(record) },
+});
+const result = await gateway.callTool('list_endpoints', { orgId }, { caller: userId });
+```
+
+- **Nothing from the environment.** An instance reads no `ACTION1_*` variable: not the credentials, not `ACTION1_BASE_URL` (the region picks a fixed address; there is no free address), not the time limit (30 s unless `timeoutMs` is given), not `ACTION1_ENABLE_WRITES` or `ACTION1_AUDIT_LOG`.
+- **Credentials.** The client secret passes key admission (printable ASCII, at least 16 characters, no 6-character piece shared with the package's own texts; refused without being quoted). The client id is checked for form and redacted as a whole value. The access and refresh tokens Action1 issues are added to the instance's redactor before use. Every result, error and audit record is redacted, and the sink check withholds any output that still holds a piece of a secret.
+- **Network.** Only the region's API address; redirects are never followed; Action1's response bodies are never read into an error (errors start with `Action1 API request failed with HTTP <status>` and our own hint).
+- **Policy.** `{ enableWrites, disabledTools, audit }` from the host (default: no writes, nothing disabled, no audit). The audit sink gets the caller as an HMAC pseudonym, the ids as a hash and errors as fixed codes; a tool whose start record fails does not run.
+- **Catalog.** `action1ToolCatalog` is deeply frozen and lists, per tool, the definition, `upstream` (every Action1 request it may make, relative to `…/api/3.0`) and `broad` (false for all).
+
+Tools (reads are enabled by default, the one write is not):
+
+| Tool | Kind | What |
+| --- | --- | --- |
+| `search_capabilities` | read | The tools this instance offers. |
+| `check_connection` | read | Token request and a count of organizations. |
+| `list_organizations` | read | Id, name, description. |
+| `list_endpoints`, `get_endpoint` | read | Computers: name, OS, status, last seen, reboot required, update and vulnerability status, counts of missing updates, logged-in user name (left out when it is a mail address); optionally the missing updates. Never IP or MAC addresses, serials, directory groups, custom attributes or comments. |
+| `list_endpoint_groups` | read | Groups (id, name, description) and their members. No filters or notification settings. |
+| `list_updates` | read | Missing updates with versions, severity, approval status and patch deadline. No install switches or binaries. |
+| `list_vulnerabilities` | read | CVEs with score, CISA KEV, remediation status, affected software; affected computers; recorded remediations (who by display name only). |
+| `get_installed_software` | read | Name, vendor, version, platform, number of computers, update status. |
+| `list_reports`, `get_report_data` | read | Reports and their rows: only named inventory, update and vulnerability columns, and never a value that looks like a mail, IP or MAC address (a version column keeps four numbers with dots as a version). |
+| `set_update_approvals` | write | Approve, decline or reset to New update versions in one organization (never `all`). Nothing is installed by the call. |
+
+Nothing in the gateway runs scripts, installs or removes software, reboots machines, opens remote sessions or deletes; scripts, automations, the software repository and the audit log are not offered.
+
 ## Security model
 
 - The server acts with **one shared Action1 API identity** (the configured client
