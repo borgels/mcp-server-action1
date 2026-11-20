@@ -1,12 +1,16 @@
 {
   "name": "mcp-server-action1",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "mcpName": "io.github.borgels/mcp-server-action1",
   "description": "MCP server for the Action1 RMM / patch management API.",
   "type": "module",
   "main": "./dist/stdio.js",
   "exports": {
-    ".": "./dist/stdio.js"
+    ".": "./dist/stdio.js",
+    "./gateway": {
+      "types": "./dist/gateway.d.ts",
+      "default": "./dist/gateway.js"
+    }
   },
   "files": [
     "dist",
@@ -19,7 +23,7 @@
     "mcp-server-action1": "./dist/stdio.js"
   },
   "scripts": {
-    "build": "tsup src/transports/stdio.ts src/transports/http.ts --format esm --dts --clean --sourcemap",
+    "build": "tsup --entry.stdio src/transports/stdio.ts --entry.http src/transports/http.ts --entry.gateway src/gateway.ts --format esm --dts --clean --sourcemap",
     "dev": "tsx src/transports/stdio.ts",
     "dev:http": "tsx src/transports/http.ts",
     "typecheck": "tsc --noEmit",
