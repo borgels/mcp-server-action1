@@ -359,73 +359,59 @@ describe('Action1 gateway access tokens', () => {
     expect(tokens(short)).toBe(2);
   });
 
-  it('never uses a token that shares a piece with the fixed fallbacks: it asks once more, then stops', async () => {
-    let issued = 0;
-    const colliding = 'zz-credential-of-this-zz';
-    const once = action1({
-      'POST /oauth2/token': () => json({ access_token: issued++ === 0 ? colliding : ACCESS_TOKEN, expires_in: 3600 }),
-    });
-    const result = await gateway(once).callTool('list_organizations', {});
-    expect(result.isError).toBeUndefined();
-    expect(tokens(once)).toBe(2);
-    for (const [, init] of once.mock.calls) expect(JSON.stringify(init?.headers ?? {})).not.toContain(colliding);
-
-    // Should Action1 echo the dropped token, it is still never passed on.
-    let again = 0;
-    const echo = action1({
-      'POST /oauth2/token': () => json({ access_token: again++ === 0 ? colliding : ACCESS_TOKEN, refresh_token: again === 1 ? `${colliding}-r` : undefined }),
-      'GET /organizations': () => json({ total_items: 1, items: [{ id: 'org-1', name: colliding, description: `${colliding}-r` }] }),
-    });
-    const echoed = await gateway(echo).callTool('list_organizations', {});
-    expect(JSON.stringify(echoed)).not.toContain(colliding);
-
-    const always = action1({ 'POST /oauth2/token': () => json({ access_token: colliding, expires_in: 3600 }) });
-    const refused = await gateway(always).callTool('list_organizations', {});
-    expect(refused.isError).toBe(true);
-    expect(refused.content[0]!.text).toMatch(/cannot be kept apart/);
-    expect(always.mock.calls.filter(([url]) => !String(url).endsWith('/oauth2/token'))).toEqual([]);
-
-    // Nor in an encoded form: URL-encoded or JSON-escaped, for a dropped token and for the client id.
-    const odd = 'zz+credential-of-this/zz"q';
-    let third = 0;
-    const encoded = action1({
-      'POST /oauth2/token': () => json({ access_token: third++ === 0 ? odd : ACCESS_TOKEN }),
-      'GET /organizations': () =>
-        json({ total_items: 1, items: [{ id: 'org-1', name: encodeURIComponent(odd), description: `${JSON.stringify(odd).slice(1, -1)} ${encodeURIComponent(CLIENT_ID)}` }] }),
-    });
-    const text = JSON.stringify(await gateway(encoded).callTool('list_organizations', {}));
-    for (const form of [encodeURIComponent(odd), encodeURIComponent(CLIENT_ID), 'credential-of-this/zz']) expect(text).not.toContain(form);
-  });
-
-  it('never passes on a token it refused, however short, nor a refresh token issued without an access token', async () => {
-    for (const [token, refresh] of [['q7Z', undefined], [undefined, 'rf9Xw2Lk5Pm8Qa3Zt6Yb']] as const) {
-      const echo = token ?? refresh!;
+  it('never uses a token it cannot keep apart from its own texts, and then passes nothing from Action1 on', async () => {
+    const unsafe = [
+      { access_token: 'zz-credential-of-this-zz' },
+      { access_token: '"isError":true,"content"' },
+      { access_token: 'a' },
+      { access_token: 'q7Z' },
+      { access_token: ACCESS_TOKEN, refresh_token: 'k7' },
+      { refresh_token: 'credential-of-this-instance' },
+    ];
+    for (const answer of unsafe) {
+      const echo = String(answer.access_token ?? answer.refresh_token);
       let first = true;
       const fetchImpl = action1({
         'POST /oauth2/token': () => {
-          const answer = first ? json({ access_token: token, refresh_token: refresh }) : json({ access_token: ACCESS_TOKEN });
+          const reply = first ? json(answer) : json({ access_token: ACCESS_TOKEN });
           first = false;
-          return answer;
+          return reply;
         },
         'GET /organizations': () => json({ total_items: 1, items: [{ id: 'org-1', name: `x ${echo} y` }] }),
       });
-      const g = gateway(fetchImpl);
-      expect((await g.callTool('list_organizations', {})).isError, echo).toBe(true);
-      const later = await g.callTool('list_organizations', {});
-      expect(JSON.stringify(later), echo).not.toContain(echo);
+      const records: Array<Record<string, unknown>> = [];
+      const g = gateway(fetchImpl, { policy: { audit: record => void records.push({ ...record }) } });
+      const results = [await g.callTool('list_organizations', {}), await g.callTool('list_organizations', {}), await g.callTool('check_connection', {})];
+      for (const result of results) {
+        expect(result.isError, echo).toBe(true);
+        expect(result.content[0]!.text, echo).toMatch(/cannot be kept apart/);
+      }
+      // One token request, and nothing else: no answer of Action1's can carry the token out.
+      expect(fetchImpl.mock.calls.map(([url]) => new URL(String(url)).pathname), echo).toEqual(['/api/3.0/oauth2/token']);
+      for (const [, init] of fetchImpl.mock.calls) expect(JSON.stringify(init?.headers ?? {})).not.toContain(`Bearer ${echo}`);
+      expect(records.every(record => record.auditRecord === undefined), echo).toBe(true);
     }
   });
 
-  it('never uses a token too short to be redacted by its pieces, and never passes it on', async () => {
-    const short = action1({
-      'POST /oauth2/token': () => json({ access_token: 'k7Qz2' }),
-      'GET /organizations': () => json({ total_items: 1, items: [{ id: 'org-1', name: 'k7Qz2' }] }),
+  it('never passes on a refresh token issued without an access token, nor an echo of an encoded token or client id', async () => {
+    const refresh = 'rf9Xw2Lk5Pm8Qa3Zt6Yb';
+    let first = true;
+    const fetchImpl = action1({
+      'POST /oauth2/token': () => {
+        const reply = first ? json({ refresh_token: refresh }) : json({ access_token: ACCESS_TOKEN });
+        first = false;
+        return reply;
+      },
+      'GET /organizations': () =>
+        json({
+          total_items: 1,
+          items: [{ id: 'org-1', name: `x ${refresh} ${encodeURIComponent(CLIENT_ID)} ${encodeURIComponent(ACCESS_TOKEN)}`, description: JSON.stringify(refresh).slice(1, -1) }],
+        }),
     });
-    const result = await gateway(short).callTool('list_organizations', {});
-    expect(result.isError).toBe(true);
-    expect(JSON.stringify(result)).not.toContain('k7Qz2');
-    expect(short.mock.calls.filter(([url]) => !String(url).endsWith('/oauth2/token'))).toEqual([]);
-
+    const g = gateway(fetchImpl);
+    expect((await g.callTool('list_organizations', {})).isError).toBe(true);
+    const later = JSON.stringify(await g.callTool('list_organizations', {}));
+    for (const form of [refresh, encodeURIComponent(CLIENT_ID), encodeURIComponent(ACCESS_TOKEN)]) expect(later).not.toContain(form);
   });
 });
 
