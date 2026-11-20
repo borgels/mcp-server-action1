@@ -194,22 +194,21 @@ export class Action1GatewayClient {
     }
     const body = (await this.readJson(response, 'POST')) as { access_token?: unknown; refresh_token?: unknown; expires_in?: unknown } | null;
     const issued = [body?.access_token, body?.refresh_token].filter((value): value is string => typeof value === 'string' && value !== '');
+    // Every token Action1 issues is redacted as a whole value first, whatever happens to it next (used, dropped, or the
+    // answer refused), so an echo of it never leaves.
+    for (const token of issued) this.redactWhole(token);
     if (typeof body?.access_token !== 'string' || body.access_token === '') {
       throw new Error('Action1 did not issue an access token.');
     }
     // A token too short to be redacted by its pieces is never used; it is still redacted as a whole value.
     if (issued.some(token => token.length < MIN_TOKEN_LENGTH)) {
-      for (const token of issued) this.redactWhole(token);
       throw new Error('Action1 issued an access token too short to be kept safe; it was not used.');
     }
     // A token that shares a piece with the fixed fallbacks is dropped unused. Should Action1 still echo it, it is
     // redacted as a whole value (its pieces are text of ours, so they cannot be).
     const own = new SecretRedactor();
     for (const token of issued) own.addSecret(token);
-    if (leaksSecret(fixedOutputs(), own)) {
-      for (const token of issued) this.redactWhole(token);
-      return undefined;
-    }
+    if (leaksSecret(fixedOutputs(), own)) return undefined;
     // Every token Action1 issues and that is used is a secret of this instance before anything else is done with it.
     for (const token of issued) this.redactor.addSecret(token);
     const seconds = typeof body.expires_in === 'number' && body.expires_in > 0 ? body.expires_in : 3600;

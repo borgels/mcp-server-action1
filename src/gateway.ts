@@ -245,7 +245,7 @@ class InstanceRedactor extends SecretRedactor {
   }
   /** The value as a whole, raw, URL-encoded and JSON-escaped, like a secret's own forms (src/upstream-http.ts). */
   addWhole(value: string): this {
-    if (value.length < 4) return this;
+    if (value === '') return this;
     let encoded = value;
     try {
       encoded = encodeURIComponent(value);

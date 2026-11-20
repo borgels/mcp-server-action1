@@ -397,6 +397,25 @@ describe('Action1 gateway access tokens', () => {
     for (const form of [encodeURIComponent(odd), encodeURIComponent(CLIENT_ID), 'credential-of-this/zz']) expect(text).not.toContain(form);
   });
 
+  it('never passes on a token it refused, however short, nor a refresh token issued without an access token', async () => {
+    for (const [token, refresh] of [['q7Z', undefined], [undefined, 'rf9Xw2Lk5Pm8Qa3Zt6Yb']] as const) {
+      const echo = token ?? refresh!;
+      let first = true;
+      const fetchImpl = action1({
+        'POST /oauth2/token': () => {
+          const answer = first ? json({ access_token: token, refresh_token: refresh }) : json({ access_token: ACCESS_TOKEN });
+          first = false;
+          return answer;
+        },
+        'GET /organizations': () => json({ total_items: 1, items: [{ id: 'org-1', name: `x ${echo} y` }] }),
+      });
+      const g = gateway(fetchImpl);
+      expect((await g.callTool('list_organizations', {})).isError, echo).toBe(true);
+      const later = await g.callTool('list_organizations', {});
+      expect(JSON.stringify(later), echo).not.toContain(echo);
+    }
+  });
+
   it('never uses a token too short to be redacted by its pieces, and never passes it on', async () => {
     const short = action1({
       'POST /oauth2/token': () => json({ access_token: 'k7Qz2' }),
