@@ -172,13 +172,21 @@ const REPORT_COLUMNS = new Set(
 );
 
 /** A value that looks like a mail address, an IP or MAC address: never passed on, whatever its field. */
-const PRIVATE_VALUE =
-  /[^\s@]+@[^\s@]+\.[^\s@]+|\b(?:\d{1,3}\.){3}\d{1,3}\b|\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b|(?:[0-9a-f]{1,4}:){4,7}[0-9a-f]{1,4}|[0-9a-f]{0,4}::[0-9a-f]{0,4}/i;
+/** A mail address (any text with an @), an IP or MAC address. */
+const MAIL = /@/;
+const IPV4 = /\b(?:\d{1,3}\.){3}\d{1,3}\b/;
+const MAC_OR_IPV6 = /\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b|(?:[0-9a-f]{1,4}:){4,7}[0-9a-f]{1,4}|[0-9a-f]{0,4}::[0-9a-f]{0,4}/i;
 
 /** A plain value, unless it looks like a mail, IP or MAC address. */
 function safe(value: unknown): unknown {
   const kept = plain(value);
-  return typeof kept === 'string' && PRIVATE_VALUE.test(kept) ? undefined : kept;
+  return typeof kept === 'string' && (MAIL.test(kept) || IPV4.test(kept) || MAC_OR_IPV6.test(kept)) ? undefined : kept;
+}
+
+/** A version: four numbers have the shape of an IP address and are kept, but never a mail or MAC address. */
+function safeVersion(value: unknown): unknown {
+  const kept = plain(value);
+  return typeof kept === 'string' && (MAIL.test(kept) || MAC_OR_IPV6.test(kept)) ? undefined : kept;
 }
 
 const REPORT_ROW = projector({
@@ -190,9 +198,8 @@ const REPORT_ROW = projector({
       Object.entries(fields).filter(
         ([key, entry]) => {
           const column = key.toLowerCase().replace(/[\s_-]/g, '');
-          // A version of four numbers has the shape of an IP address, so a version column is checked for a mail only.
-          const kept = column.includes('version') ? plain(entry) : safe(entry);
-          return REPORT_COLUMNS.has(column) && kept !== undefined && !(typeof kept === 'string' && kept.includes('@'));
+          const kept = column.includes('version') ? safeVersion(entry) : safe(entry);
+          return REPORT_COLUMNS.has(column) && kept !== undefined;
         },
       ),
     );

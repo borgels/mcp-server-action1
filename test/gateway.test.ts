@@ -311,6 +311,8 @@ describe('Action1 gateway answers, closed against bypasses', () => {
         Name: 'mette@example.org',
         Status: '00:11:22:33:44:55',
         OS: 'fe80:0:0:0:0:0:0:1',
+        'Installed Version': '00:11:22:33:44:56',
+        'Latest Version': 'person@localhost',
       },
     };
     const result = await gateway(action1({ 'GET /reportdata/org-1/rep-1/data': () => json({ total_items: 1, items: [row] }) })).callTool(
@@ -322,7 +324,7 @@ describe('Action1 gateway answers, closed against bypasses', () => {
   });
 
   it('leaves out a logged-in user name that is a mail address', async () => {
-    const endpoint = { ...ENDPOINT, user: 'person@example.org' };
+    const endpoint = { ...ENDPOINT, user: 'person@localhost' };
     for (const [key, body, tool, input] of [
       ['GET /endpoints/managed/org-1', { total_items: 1, items: [endpoint] }, 'list_endpoints', { orgId: 'org-1' }],
       ['GET /endpoints/managed/org-1/ep-1', endpoint, 'get_endpoint', { orgId: 'org-1', endpointId: 'ep-1' }],
@@ -335,7 +337,7 @@ describe('Action1 gateway answers, closed against bypasses', () => {
     ] as const) {
       const result = await gateway(action1({ [key]: () => json(body) })).callTool(tool, input as GatewayJsonObject);
       expect(result.isError, tool).toBeUndefined();
-      expect(JSON.stringify(result), tool).not.toContain('example.org');
+      expect(JSON.stringify(result), tool).not.toMatch(/person@/);
     }
   });
 });
@@ -367,6 +369,15 @@ describe('Action1 gateway access tokens', () => {
     expect(result.isError).toBeUndefined();
     expect(tokens(once)).toBe(2);
     for (const [, init] of once.mock.calls) expect(JSON.stringify(init?.headers ?? {})).not.toContain(colliding);
+
+    // Should Action1 echo the dropped token, it is still never passed on.
+    let again = 0;
+    const echo = action1({
+      'POST /oauth2/token': () => json({ access_token: again++ === 0 ? colliding : ACCESS_TOKEN, refresh_token: again === 1 ? `${colliding}-r` : undefined }),
+      'GET /organizations': () => json({ total_items: 1, items: [{ id: 'org-1', name: colliding, description: `${colliding}-r` }] }),
+    });
+    const echoed = await gateway(echo).callTool('list_organizations', {});
+    expect(JSON.stringify(echoed)).not.toContain(colliding);
 
     const always = action1({ 'POST /oauth2/token': () => json({ access_token: colliding, expires_in: 3600 }) });
     const refused = await gateway(always).callTool('list_organizations', {});

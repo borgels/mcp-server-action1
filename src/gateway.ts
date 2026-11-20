@@ -234,18 +234,28 @@ function contextValue(value: unknown, redactor: SecretRedactor): string | undefi
 }
 
 /**
- * A redactor that also replaces the client id, as a whole value only (not its
- * pieces, which can be ordinary text such as the Action1 host name).
+ * A redactor that also replaces whole values: the client id, and access tokens Action1 issued that were dropped unused
+ * (their pieces may be ordinary text, such as the Action1 host name or a fallback, so only the whole value is matched).
  */
 class InstanceRedactor extends SecretRedactor {
-  constructor(private readonly clientId: string) {
+  private readonly whole = new Set<string>();
+  constructor(clientId: string) {
     super();
+    this.addWhole(clientId);
+  }
+  addWhole(value: string): this {
+    if (value.length >= 8) this.whole.add(value);
+    return this;
   }
   override redact(value: string): string {
-    return super.redact(this.clientId.length >= 8 ? value.split(this.clientId).join(REDACTION_MARKER) : value);
+    let result = value;
+    for (const whole of this.whole) result = result.split(whole).join(REDACTION_MARKER);
+    return super.redact(result);
   }
   override matches(text: string): boolean {
-    return super.matches(text) || (this.clientId.length >= 8 && text.includes(this.clientId));
+    if (super.matches(text)) return true;
+    for (const whole of this.whole) if (text.includes(whole)) return true;
+    return false;
   }
 }
 
@@ -287,7 +297,7 @@ export function createAction1Gateway(options: Action1GatewayOptions) {
   }
 }
 
-function buildAction1Gateway(options: Action1GatewayOptions, clientId: string, clientSecret: string, redactor: SecretRedactor) {
+function buildAction1Gateway(options: Action1GatewayOptions, clientId: string, clientSecret: string, redactor: InstanceRedactor) {
   // Only these options are read; anything else a host passes is dropped.
   const { policy: hostPolicy, fetchImpl, timeoutMs } = options;
   const region = requiredRegion(options);
@@ -302,6 +312,7 @@ function buildAction1Gateway(options: Action1GatewayOptions, clientId: string, c
     region,
     timeoutMs: timeoutMs ?? DEFAULT_TIMEOUT_MS,
     redactor,
+    redactWhole: value => void redactor.addWhole(value),
     ...(fetchImpl ? { fetchImpl } : {}),
   });
   const offeredTools: ReadonlySet<string> = new Set(GATEWAY_TOOL_NAMES.filter(name => !policy.disabledTools.has(name)));

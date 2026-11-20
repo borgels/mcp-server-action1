@@ -106,6 +106,8 @@ export interface Action1GatewayClientOptions {
   region: Action1Region;
   timeoutMs: number;
   redactor: SecretRedactor;
+  /** Redacts a value as a whole only (a token that was dropped unused). */
+  redactWhole: (value: string) => void;
   fetchImpl?: typeof fetch;
 }
 
@@ -115,6 +117,7 @@ export class Action1GatewayClient {
   private readonly clientSecret: string;
   private readonly timeoutMs: number;
   private readonly redactor: SecretRedactor;
+  private readonly redactWhole: (value: string) => void;
   private readonly fetchImpl: typeof fetch;
   /** The access token, in a box shared with every view of this client (a read tool's view keeps the same token). */
   private readonly tokenBox: { token?: { value: string; expiresAt: number } } = {};
@@ -124,6 +127,7 @@ export class Action1GatewayClient {
     this.clientSecret = options.clientSecret;
     this.baseUrl = ACTION1_REGIONS[options.region];
     this.redactor = options.redactor;
+    this.redactWhole = options.redactWhole;
     this.timeoutMs = options.timeoutMs;
     if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs < 1 || this.timeoutMs > MAX_TIMEOUT_MS) {
       throw new Error(`timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}.`);
@@ -191,10 +195,14 @@ export class Action1GatewayClient {
     if (typeof body?.access_token !== 'string' || body.access_token === '') {
       throw new Error('Action1 did not issue an access token.');
     }
-    // A token that shares a piece with the fixed fallbacks is dropped unused (and so is never an output).
+    // A token that shares a piece with the fixed fallbacks is dropped unused. Should Action1 still echo it, it is
+    // redacted as a whole value (its pieces are text of ours, so they cannot be).
     const own = new SecretRedactor();
     for (const token of issued) own.addSecret(token);
-    if (leaksSecret(fixedOutputs(), own)) return undefined;
+    if (leaksSecret(fixedOutputs(), own)) {
+      for (const token of issued) this.redactWhole(token);
+      return undefined;
+    }
     // Every token Action1 issues and that is used is a secret of this instance before anything else is done with it.
     for (const token of issued) this.redactor.addSecret(token);
     const seconds = typeof body.expires_in === 'number' && body.expires_in > 0 ? body.expires_in : 3600;
