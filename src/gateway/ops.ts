@@ -7,9 +7,9 @@ import { cveSegment, idSegment, type Action1GatewayClient, type QueryValue } fro
  * field that is not named here is never passed on. So an endpoint's IP and MAC
  * addresses, serial number, directory groups and custom attributes are never
  * returned, nor the e-mail of whoever recorded a remediation, nor anything
- * Action1 adds later. Report rows are the exception that keeps columns by
- * name: only plain text values, and never a column whose name points to an
- * address, a serial number, a mail, a phone number or a secret.
+ * Action1 adds later. Report rows keep only the columns named in
+ * REPORT_COLUMNS, as plain values. A user name or report value that looks like
+ * a mail, IP or MAC address is left out wherever it appears.
  */
 
 type Json = Record<string, unknown>;
@@ -73,7 +73,8 @@ const ENDPOINT_FIELDS: Projection = {
   vulnerabilities: COUNTS,
   agent_version: plain,
   subscription_status: plain,
-  user: plain,
+  // The logged-in user name, but never when it is a mail address.
+  user: safe,
   organization_id: plain,
 };
 const ENDPOINT = projector(ENDPOINT_FIELDS);
@@ -129,7 +130,7 @@ const VULNERABLE_ENDPOINT = projector({
   endpoint_id: plain,
   endpoint_name: plain,
   OS: plain,
-  user: plain,
+  user: safe,
   organization_id: plain,
   software: listOf(SOFTWARE),
 });
@@ -153,15 +154,47 @@ const INSTALLED_SOFTWARE = projector({
 
 const REPORT = projector({ id: plain, name: plain, description: plain, long_description: plain, builtin: plain, simple: plain });
 
-/** Report columns that are never passed on: addresses, serials, mails, phones and anything named like a secret. */
-const WITHHELD_COLUMN = /(^|[^a-z])(ip|mac)([^a-z]|$)|address|serial|e-?mail|phone|mobile|password|secret|token|key|bitlocker|recovery/i;
+/**
+ * Report columns that are passed on, by name (compared without case, spaces, `_` or `-`): the inventory, update and
+ * vulnerability columns of Action1's reports. Any other column is left out, whatever it holds.
+ */
+const REPORT_COLUMNS = new Set(
+  [
+    'Name', 'Endpoint', 'Endpoint Name', 'Device Name', 'Computer', 'OS', 'Operating System', 'Platform', 'Architecture',
+    'Manufacturer', 'Model', 'Vendor', 'Product', 'Product Name', 'Software', 'Version', 'Installed Version',
+    'Latest Version', 'Update', 'Update Name', 'Updates', 'KB', 'KB Number', 'Title', 'Category', 'Type', 'Update Type',
+    'Severity', 'Security Severity', 'Approval Status', 'Release Date', 'Status', 'Update Status', 'Online Status',
+    'Reboot Required', 'Last Seen', 'Last Boot Time', 'Last Update', 'Missing Updates', 'Missing Critical Updates',
+    'Missing Other Updates', 'Endpoints', 'Endpoints Count', 'Count', 'Total', 'CVE', 'CVE ID', 'CVSS', 'CVSS Score',
+    'Score', 'Vulnerabilities', 'Remediation Status', 'Remediation Deadline', 'CISA KEV', 'Organization', 'Group',
+    'Agent Version', 'Disk', 'Free Space', 'RAM', 'CPU', 'Warranty', 'Install Date',
+  ].map(column => column.toLowerCase().replace(/[\s_-]/g, '')),
+);
+
+/** A value that looks like a mail address, an IP or MAC address: never passed on, whatever its field. */
+const PRIVATE_VALUE =
+  /[^\s@]+@[^\s@]+\.[^\s@]+|\b(?:\d{1,3}\.){3}\d{1,3}\b|\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b|(?:[0-9a-f]{1,4}:){4,7}[0-9a-f]{1,4}|[0-9a-f]{0,4}::[0-9a-f]{0,4}/i;
+
+/** A plain value, unless it looks like a mail, IP or MAC address. */
+function safe(value: unknown): unknown {
+  const kept = plain(value);
+  return typeof kept === 'string' && PRIVATE_VALUE.test(kept) ? undefined : kept;
+}
+
 const REPORT_ROW = projector({
   id: plain,
   fields: value => {
     const fields = asObject(value);
     if (!fields) return undefined;
     return Object.fromEntries(
-      Object.entries(fields).filter(([key, entry]) => !WITHHELD_COLUMN.test(key) && plain(entry) !== undefined),
+      Object.entries(fields).filter(
+        ([key, entry]) => {
+          const column = key.toLowerCase().replace(/[\s_-]/g, '');
+          // A version of four numbers has the shape of an IP address, so a version column is checked for a mail only.
+          const kept = column.includes('version') ? plain(entry) : safe(entry);
+          return REPORT_COLUMNS.has(column) && kept !== undefined && !(typeof kept === 'string' && kept.includes('@'));
+        },
+      ),
     );
   },
 });

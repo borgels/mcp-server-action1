@@ -97,12 +97,12 @@ Tools (reads are enabled by default, the one write is not):
 | `search_capabilities` | read | The tools this instance offers. |
 | `check_connection` | read | Token request and a count of organizations. |
 | `list_organizations` | read | Id, name, description. |
-| `list_endpoints`, `get_endpoint` | read | Computers: name, OS, status, last seen, reboot required, update and vulnerability status, counts of missing updates, logged-in user name; optionally the missing updates. Never IP or MAC addresses, serials, directory groups, custom attributes or comments. |
+| `list_endpoints`, `get_endpoint` | read | Computers: name, OS, status, last seen, reboot required, update and vulnerability status, counts of missing updates, logged-in user name (left out when it is a mail address); optionally the missing updates. Never IP or MAC addresses, serials, directory groups, custom attributes or comments. |
 | `list_endpoint_groups` | read | Groups (id, name, description) and their members. No filters or notification settings. |
 | `list_updates` | read | Missing updates with versions, severity, approval status and patch deadline. No install switches or binaries. |
 | `list_vulnerabilities` | read | CVEs with score, CISA KEV, remediation status, affected software; affected computers; recorded remediations (who by display name only). |
 | `get_installed_software` | read | Name, vendor, version, platform, number of computers, update status. |
-| `list_reports`, `get_report_data` | read | Reports and their rows: plain text columns only, never a column for addresses, serials, mail, phone or secrets. |
+| `list_reports`, `get_report_data` | read | Reports and their rows: only named inventory, update and vulnerability columns, and never a value that looks like a mail, IP or MAC address. |
 | `set_update_approvals` | write | Approve, decline or reset to New update versions in one organization (never `all`). Nothing is installed by the call. |
 
 Nothing in the gateway runs scripts, installs or removes software, reboots machines, opens remote sessions or deletes; scripts, automations, the software repository and the audit log are not offered.

@@ -1,4 +1,6 @@
-import type { SecretRedactor } from '../upstream-http.js';
+import { fixedOutputs } from '../fallbacks.js';
+import { leaksSecret } from '../key-admission.js';
+import { SecretRedactor } from '../upstream-http.js';
 
 /**
  * The Action1 client of the embedded gateway (src/gateway.ts). Unlike the MCP
@@ -114,7 +116,8 @@ export class Action1GatewayClient {
   private readonly timeoutMs: number;
   private readonly redactor: SecretRedactor;
   private readonly fetchImpl: typeof fetch;
-  private token?: { value: string; expiresAt: number };
+  /** The access token, in a box shared with every view of this client (a read tool's view keeps the same token). */
+  private readonly tokenBox: { token?: { value: string; expiresAt: number } } = {};
 
   constructor(options: Action1GatewayClientOptions) {
     this.clientId = options.clientId;
@@ -150,12 +153,31 @@ export class Action1GatewayClient {
 
   /** An access token from the client credentials, kept for this instance and added to its redactor. */
   private async accessToken(): Promise<string> {
-    if (this.token && Date.now() < this.token.expiresAt - TOKEN_MARGIN_MS) return this.token.value;
-    const response = await this.send(`${this.baseUrl}/oauth2/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-      body: new URLSearchParams({ client_id: this.clientId, client_secret: this.clientSecret }).toString(),
-    }, 'POST');
+    const kept = this.tokenBox.token;
+    if (kept && Date.now() < kept.expiresAt - TOKEN_MARGIN_MS) return kept.value;
+    // A token that shares a piece with the fixed fallbacks could not be withheld safely, so it is never used: one new
+    // token is asked for instead (they are random), and a second such token stops the call.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const issued = await this.issueToken();
+      if (issued) {
+        this.tokenBox.token = issued;
+        return issued.value;
+      }
+    }
+    throw new Error('Action1 issued an access token that cannot be kept apart from this server’s own texts. Try again.');
+  }
+
+  /** One token request: the token and its expiry, or undefined when it shares a piece with the fixed fallbacks. */
+  private async issueToken(): Promise<{ value: string; expiresAt: number } | undefined> {
+    const response = await this.send(
+      `${this.baseUrl}/oauth2/token`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+        body: new URLSearchParams({ client_id: this.clientId, client_secret: this.clientSecret }).toString(),
+      },
+      'POST',
+    );
     if (!response.ok) {
       await discard(response);
       throw new Action1GatewayHttpError(
@@ -165,15 +187,18 @@ export class Action1GatewayClient {
       );
     }
     const body = (await this.readJson(response, 'POST')) as { access_token?: unknown; refresh_token?: unknown; expires_in?: unknown } | null;
-    // Every token Action1 issues is a secret of this instance before anything else is done with it.
-    if (typeof body?.refresh_token === 'string') this.redactor.addSecret(body.refresh_token);
+    const issued = [body?.access_token, body?.refresh_token].filter((value): value is string => typeof value === 'string' && value !== '');
     if (typeof body?.access_token !== 'string' || body.access_token === '') {
       throw new Error('Action1 did not issue an access token.');
     }
-    this.redactor.addSecret(body.access_token);
+    // A token that shares a piece with the fixed fallbacks is dropped unused (and so is never an output).
+    const own = new SecretRedactor();
+    for (const token of issued) own.addSecret(token);
+    if (leaksSecret(fixedOutputs(), own)) return undefined;
+    // Every token Action1 issues and that is used is a secret of this instance before anything else is done with it.
+    for (const token of issued) this.redactor.addSecret(token);
     const seconds = typeof body.expires_in === 'number' && body.expires_in > 0 ? body.expires_in : 3600;
-    this.token = { value: body.access_token, expiresAt: Date.now() + seconds * 1000 };
-    return this.token.value;
+    return { value: body.access_token, expiresAt: Date.now() + seconds * 1000 };
   }
 
   private async request<T>(method: 'GET' | 'POST', path: string, query?: Record<string, QueryValue>, body?: unknown): Promise<T> {

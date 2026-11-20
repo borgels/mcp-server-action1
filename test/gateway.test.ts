@@ -297,6 +297,85 @@ describe('Action1 gateway answers', () => {
   });
 });
 
+describe('Action1 gateway answers, closed against bypasses', () => {
+  it('keeps only named report columns, and no mail, IP or MAC address in any of them', async () => {
+    const row = {
+      id: 'r',
+      fields: {
+        IPv4: '192.0.2.42',
+        Owner: 'person@example.org',
+        Notes: 'SN-TEST-01',
+        Version: '2.51.0.2', // hygiene:allow (a version, not an address)
+        'Last Seen': '2026-11-20 08:00:00',
+        Endpoint: '192.0.2.43',
+        Name: 'mette@example.org',
+        Status: '00:11:22:33:44:55',
+        OS: 'fe80:0:0:0:0:0:0:1',
+      },
+    };
+    const result = await gateway(action1({ 'GET /reportdata/org-1/rep-1/data': () => json({ total_items: 1, items: [row] }) })).callTool(
+      'get_report_data',
+      { orgId: 'org-1', reportId: 'rep-1' },
+    );
+    expect(result.structuredContent).toEqual({ items: [{ id: 'r', fields: { Version: '2.51.0.2', 'Last Seen': '2026-11-20 08:00:00' } }], from: 0, total: 1 }); // hygiene:allow (a version, not an address)
+    for (const hidden of ['192.0.2', 'example.org', 'SN-TEST', '00:11:22', 'fe80']) expect(JSON.stringify(result)).not.toContain(hidden);
+  });
+
+  it('leaves out a logged-in user name that is a mail address', async () => {
+    const endpoint = { ...ENDPOINT, user: 'person@example.org' };
+    for (const [key, body, tool, input] of [
+      ['GET /endpoints/managed/org-1', { total_items: 1, items: [endpoint] }, 'list_endpoints', { orgId: 'org-1' }],
+      ['GET /endpoints/managed/org-1/ep-1', endpoint, 'get_endpoint', { orgId: 'org-1', endpointId: 'ep-1' }],
+      [
+        'GET /vulnerabilities/org-1/CVE-2026-1234/endpoints',
+        { total_items: 1, items: [{ endpoint_id: 'ep-1', user: 'person@example.org' }] },
+        'list_vulnerabilities',
+        { orgId: 'org-1', cveId: 'CVE-2026-1234', detail: 'endpoints' },
+      ],
+    ] as const) {
+      const result = await gateway(action1({ [key]: () => json(body) })).callTool(tool, input as GatewayJsonObject);
+      expect(result.isError, tool).toBeUndefined();
+      expect(JSON.stringify(result), tool).not.toContain('example.org');
+    }
+  });
+});
+
+describe('Action1 gateway access tokens', () => {
+  const tokens = (fetchImpl: ReturnType<typeof action1>) => fetchImpl.mock.calls.filter(([url]) => String(url).endsWith('/oauth2/token')).length;
+
+  it('asks for a token once per instance, also across read tools, and again when it is about to expire', async () => {
+    const fetchImpl = action1();
+    const g = gateway(fetchImpl);
+    await g.callTool('list_organizations', {});
+    await g.callTool('list_endpoints', { orgId: 'org-1' });
+    await g.callTool('list_reports', {});
+    expect(tokens(fetchImpl)).toBe(1);
+    const short = action1({ 'POST /oauth2/token': () => json({ access_token: ACCESS_TOKEN, expires_in: 30 }) });
+    const h = gateway(short);
+    await h.callTool('list_organizations', {});
+    await h.callTool('list_organizations', {});
+    expect(tokens(short)).toBe(2);
+  });
+
+  it('never uses a token that shares a piece with the fixed fallbacks: it asks once more, then stops', async () => {
+    let issued = 0;
+    const colliding = 'zz-credential-of-this-zz';
+    const once = action1({
+      'POST /oauth2/token': () => json({ access_token: issued++ === 0 ? colliding : ACCESS_TOKEN, expires_in: 3600 }),
+    });
+    const result = await gateway(once).callTool('list_organizations', {});
+    expect(result.isError).toBeUndefined();
+    expect(tokens(once)).toBe(2);
+    for (const [, init] of once.mock.calls) expect(JSON.stringify(init?.headers ?? {})).not.toContain(colliding);
+
+    const always = action1({ 'POST /oauth2/token': () => json({ access_token: colliding, expires_in: 3600 }) });
+    const refused = await gateway(always).callTool('list_organizations', {});
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0]!.text).toMatch(/cannot be kept apart/);
+    expect(always.mock.calls.filter(([url]) => !String(url).endsWith('/oauth2/token'))).toEqual([]);
+  });
+});
+
 describe('Action1 gateway errors', () => {
   it('starts an error with the HTTP status in our own words and never carries Action1’s body', async () => {
     const fetchImpl = action1({ 'GET /organizations': () => json({ developer_message: 'Mette Jensen is not allowed' }, 403, { 'retry-after': '5' }) });
