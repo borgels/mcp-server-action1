@@ -4,7 +4,7 @@ import { fixedOutputs, withheldResult } from './fallbacks.js';
 import { admitsKey, KEY_REFUSED, leaksSecret, maskedText, sealedError } from './key-admission.js';
 import { redactDeep, redactText } from './redaction.js';
 import { writeGatewayAuditEvent } from './gateway/audit.js';
-import { Action1GatewayClient, ACTION1_REGIONS, type Action1Region } from './gateway/client.js';
+import { Action1GatewayClient, ACTION1_REGIONS, UNSAFE_TOKEN, type Action1Region } from './gateway/client.js';
 import {
   canonicalToolName,
   GatewayConfigError,
@@ -340,6 +340,9 @@ function buildAction1Gateway(options: Action1GatewayOptions, clientId: string, c
         },
         () =>
           runCall(toolName, input).then(result => {
+            // The last step but one: an instance an unsafe token closed meanwhile (another call's token request, while
+            // this one waited for its audit) passes nothing on, not even an answer it already read.
+            if (client.closed) return errorResult(UNSAFE_TOKEN);
             const final = result.isError ? (redactDeep(result, redactor) as GatewayToolResult) : result;
             // The sink check, as the very last step: a result that holds a piece of a secret anywhere is withheld whole.
             return leaksSecret(final, redactor) ? withheldResult() : final;

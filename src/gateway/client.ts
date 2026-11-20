@@ -144,6 +144,11 @@ export class Action1GatewayClient {
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
+  /** True once an issued token could not be kept apart from our own texts: the instance passes nothing on any more. */
+  get closed(): boolean {
+    return this.tokenBox.unsafe === true;
+  }
+
   async get<T>(path: string, query?: Record<string, QueryValue>): Promise<T> {
     return this.request<T>('GET', path, query);
   }

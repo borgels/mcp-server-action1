@@ -420,6 +420,41 @@ describe('Action1 gateway access tokens', () => {
     expect(tokens).toBe(1);
     expect(fetchImpl.mock.calls.filter(([url]) => !String(url).endsWith('/oauth2/token'))).toEqual([]);
 
+    // A call that already read its answer and waits for its finish audit passes nothing on if another call's token
+    // request closes the instance meanwhile.
+    let renewals = 0;
+    const renewing = action1({
+      'POST /oauth2/token': () => {
+        renewals += 1;
+        return json({ access_token: renewals === 1 ? ACCESS_TOKEN : colliding, expires_in: 61 });
+      },
+      'GET /organizations': () => json({ total_items: 1, items: [{ id: 'org-1', name: colliding }] }),
+    });
+    let hold!: () => void;
+    const held = new Promise<void>(resolve => (hold = resolve));
+    let waiting = false;
+    const audit = async (record: Readonly<Record<string, unknown>>) => {
+      if (record.action === 'finish' && !waiting) {
+        waiting = true;
+        await held;
+      }
+    };
+    const k = gateway(renewing, { policy: { audit } });
+    const first = k.callTool('list_organizations', {});
+    for (let i = 0; i < 50 && !waiting; i += 1) await new Promise(resolve => setImmediate(resolve));
+    expect(waiting).toBe(true);
+    vi.useFakeTimers({ now: Date.now() + 5_000, toFake: ['Date'] });
+    try {
+      const second = await k.callTool('list_organizations', {});
+      expect(second.content[0]!.text).toMatch(/cannot be kept apart/);
+    } finally {
+      vi.useRealTimers();
+    }
+    hold();
+    const late = await first;
+    expect(late.isError).toBe(true);
+    expect(JSON.stringify(late)).not.toContain(colliding);
+
     // Concurrent reads on a good token share one token request too.
     const good = action1();
     const h = gateway(good);
