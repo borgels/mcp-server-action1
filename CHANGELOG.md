@@ -11,7 +11,8 @@
   `list_software_repository`; writes `deploy_updates` (no restart unless `allowReboot`), `deploy_software` (no
   restart) and `run_automation` (an automation an administrator has set up, run now with its own actions, on its own
   targets or on named computers and groups). One organization per run, `all` refused as organization and target, at
-  most 50 named targets, each once. No tool writes a script or an action. All writes are off unless the host's policy
+  most 50 named targets, each once; an automation's own targets are held to the same rules. The option
+  `rebootMessage` sets the warning Action1 shows before a restart. No tool writes a script or an action. All writes are off unless the host's policy
   enables writes.
 
 The MCP server's own tools and settings are unchanged.

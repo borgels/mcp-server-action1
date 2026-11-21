@@ -130,6 +130,36 @@ describe('Action1 gateway everyday work', () => {
     expect(posted(fetchImpl)).toEqual([]);
   });
 
+  it('runs an automation on its own targets only when they are named computers or groups, at most 50, never all', async () => {
+    const own = (endpoints: unknown) => () => json({ ...SCHEDULE, endpoints });
+    for (const endpoints of [
+      [{ id: 'ALL', type: 'EndpointGroup' }],
+      Array.from({ length: 51 }, (_, i) => ({ id: `ep-${i}`, type: 'Endpoint' })),
+      [{ id: 'f-1', type: 'Filter' }],
+      [{ type: 'Endpoint' }],
+      [{ id: 'ep-1', type: 'Endpoint' }, { id: 'ep-1', type: 'Endpoint' }],
+      [],
+    ]) {
+      const fetchImpl = action1({ 'GET /automations/schedules/org-1/auto-1': own(endpoints) });
+      const result = await gateway(fetchImpl).callTool('run_automation', { orgId: 'org-1', automationId: 'auto-1' });
+      expect(result.isError, JSON.stringify(endpoints).slice(0, 60)).toBe(true);
+      expect(posted(fetchImpl)).toEqual([]);
+    }
+    const fetchImpl = action1({ 'GET /automations/schedules/org-1/auto-1': own([{ id: 'ALL', type: 'EndpointGroup' }]) });
+    const named = await gateway(fetchImpl).callTool('run_automation', { orgId: 'org-1', automationId: 'auto-1', targets: [{ type: 'group', id: 'g-2' }] });
+    expect(named.isError).toBeUndefined();
+    expect((posted(fetchImpl)[0] as Record<string, any>).endpoints).toEqual([{ id: 'g-2', type: 'EndpointGroup' }]);
+  });
+
+  it('shows the host warning before a restart, and refuses one that is not printable', async () => {
+    const fetchImpl = action1();
+    const g = createAction1Gateway({ clientId: CLIENT_ID, clientSecret: SECRET, region: 'eu', fetchImpl, policy: { enableWrites: true }, rebootMessage: 'Gem dit arbejde: pcen genstarter om fire timer.' });
+    await g.callTool('deploy_updates', { orgId: 'org-1', targets: [{ type: 'endpoint', id: 'ep-1' }], packages: [{ packageId: 'pkg-1', version: '1' }], allowReboot: true });
+    expect((posted(fetchImpl)[0] as Record<string, any>).actions[0].params.reboot_options.message_text).toBe('Gem dit arbejde: pcen genstarter om fire timer.');
+    expect(() => createAction1Gateway({ clientId: CLIENT_ID, clientSecret: SECRET, region: 'eu', fetchImpl, rebootMessage: `a${String.fromCharCode(0)}b` })).toThrow();
+    expect(() => createAction1Gateway({ clientId: CLIENT_ID, clientSecret: SECRET, region: 'eu', fetchImpl, rebootMessage: 'x'.repeat(501) })).toThrow();
+  });
+
   it('runs no change unless the host enables writes', async () => {
     const fetchImpl = action1();
     const g = gateway(fetchImpl, false);

@@ -132,10 +132,14 @@ export interface Action1GatewayClientOptions {
   /** Redacts a value as a whole only (a token that was dropped unused). */
   redactWhole: (value: string) => void;
   fetchImpl?: typeof fetch;
+  /** The host's text for the warning before a restart (deploy_updates with allowReboot). */
+  rebootMessage?: string;
 }
 
 export class Action1GatewayClient {
   readonly baseUrl: string;
+  /** The host's text for the warning before a restart, or undefined for Action1's own. */
+  readonly rebootMessage?: string;
   private readonly clientId: string;
   private readonly clientSecret: string;
   private readonly timeoutMs: number;
@@ -160,6 +164,7 @@ export class Action1GatewayClient {
       throw new Error(`timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}.`);
     }
     this.fetchImpl = options.fetchImpl ?? fetch;
+    if (options.rebootMessage !== undefined) this.rebootMessage = options.rebootMessage;
   }
 
   /** True once an issued token could not be kept apart from our own texts: the instance passes nothing on any more. */

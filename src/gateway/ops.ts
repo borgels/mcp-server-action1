@@ -503,6 +503,30 @@ function targets(list: readonly TargetInput[]): Array<{ id: string; type: 'Endpo
   });
 }
 
+/**
+ * The targets of an automation as an administrator set them up, held to the same rules as named targets: each a
+ * computer or group by a valid id, at most MAX_TARGETS, none twice, and never "all". An automation set up for every
+ * computer, for more than MAX_TARGETS, or with targets of another kind (filters) is not run on its own targets: the
+ * targets must then be named.
+ */
+function ownTargets(value: unknown): Array<{ id: string; type: 'Endpoint' | 'EndpointGroup' }> {
+  const list = Array.isArray(value) ? value : [];
+  const named: TargetInput[] = list.map(entry => {
+    const target = asObject(entry);
+    const type = target?.type === 'Endpoint' ? 'endpoint' : target?.type === 'EndpointGroup' ? 'group' : undefined;
+    if (!target || type === undefined || typeof target.id !== 'string') {
+      throw new Error('The automation has targets that are not computers or groups; name them in targets.');
+    }
+    return { type, id: target.id };
+  });
+  if (named.length === 0) throw new Error('The automation has no computers or groups; name them in targets.');
+  if (named.some(target => target.id.trim().toLowerCase() === 'all')) {
+    throw new Error('The automation is set up for every computer; name the computers or groups in targets.');
+  }
+  if (named.length > MAX_TARGETS) throw new Error(`The automation has more than ${MAX_TARGETS} targets; name them in targets.`);
+  return targets(named);
+}
+
 /** Packages as Action1 takes them in a deployment: one object per package, its id mapped to the version. */
 function packageMap(list: readonly PackageInput[]): Array<Record<string, string>> {
   const seen = new Set<string>();
@@ -523,14 +547,13 @@ function stamp(): string {
 }
 
 const REBOOT_NO = { auto_reboot: 'no' };
+/** Action1's own text for the warning before a restart; the host may give its own (rebootMessage). */
+export const DEFAULT_REBOOT_MESSAGE =
+  'Your computer requires maintenance and will be rebooted. Please save all work and reboot now to avoid losing any data.';
 /** Action1's own reboot settings for an update deployment that may restart: the user is warned and has four hours. */
-const REBOOT_WITH_WARNING = {
-  auto_reboot: 'yes',
-  show_message: 'yes',
-  message_text:
-    'Your computer requires maintenance and will be rebooted. Please save all work and reboot now to avoid losing any data.',
-  timeout: 240,
-};
+function rebootWithWarning(message: string | undefined) {
+  return { auto_reboot: 'yes', show_message: 'yes', message_text: message ?? DEFAULT_REBOOT_MESSAGE, timeout: 240 };
+}
 
 export async function deployUpdates(
   client: Action1GatewayClient,
@@ -552,7 +575,7 @@ export async function deployUpdates(
           packages,
           update_approval: 'manual',
           scope: 'Specified',
-          reboot_options: input.allowReboot ? REBOOT_WITH_WARNING : REBOOT_NO,
+          reboot_options: input.allowReboot ? rebootWithWarning(client.rebootMessage) : REBOOT_NO,
         },
       },
     ],
@@ -602,9 +625,8 @@ export async function runAutomation(
   if (!schedule || !Array.isArray(actions) || actions.length === 0) {
     throw new Error('The automation has no actions to run.');
   }
-  const own = Array.isArray(schedule.endpoints) ? schedule.endpoints : [];
+  const own = chosen === undefined ? ownTargets(schedule.endpoints) : [];
   const endpoints = chosen ?? own;
-  if (endpoints.length === 0) throw new Error('The automation has no computers or groups; name them in targets.');
   const name = typeof schedule.name === 'string' && schedule.name.trim() !== '' ? schedule.name.slice(0, 150) : 'Automation';
   const retry = schedule.retry_minutes;
   const raw = await client.post(`/automations/instances/${orgSegment}`, {

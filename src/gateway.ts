@@ -129,6 +129,11 @@ export interface Action1GatewayOptions {
   /** Time limit per Action1 request in milliseconds. Default 30 seconds; never read from the environment. */
   timeoutMs?: number;
   /**
+   * The text Action1 shows on a computer before deploy_updates restarts it (allowReboot), for example in the
+   * language of the company. 1-500 printable characters; Action1's own English text when left out.
+   */
+  rebootMessage?: string;
+  /**
    * Instance policy from the host. Without it the instance uses the default
    * policy (no writes, no disabled tools, no audit records); it never reads
    * a policy or audit variable from the environment.
@@ -317,7 +322,10 @@ export function createAction1Gateway(options: Action1GatewayOptions) {
 
 function buildAction1Gateway(options: Action1GatewayOptions, clientId: string, clientSecret: string, redactor: InstanceRedactor) {
   // Only these options are read; anything else a host passes is dropped.
-  const { policy: hostPolicy, fetchImpl, timeoutMs } = options;
+  const { policy: hostPolicy, fetchImpl, timeoutMs, rebootMessage } = options;
+  if (rebootMessage !== undefined && (typeof rebootMessage !== 'string' || !/^[^\u0000-\u001f\u007f]{1,500}$/u.test(rebootMessage.trim()))) {
+    throw new GatewayConfigError('options.rebootMessage must be 1-500 printable characters.');
+  }
   const region = requiredRegion(options);
   if (fetchImpl !== undefined && typeof fetchImpl !== 'function') {
     throw new GatewayConfigError('options.fetchImpl must be a function.');
@@ -331,6 +339,7 @@ function buildAction1Gateway(options: Action1GatewayOptions, clientId: string, c
     timeoutMs: timeoutMs ?? DEFAULT_TIMEOUT_MS,
     redactor,
     redactWhole: value => void redactor.addWhole(value),
+    ...(rebootMessage !== undefined ? { rebootMessage: rebootMessage.trim() } : {}),
     ...(fetchImpl ? { fetchImpl } : {}),
   });
   const offeredTools: ReadonlySet<string> = new Set(GATEWAY_TOOL_NAMES.filter(name => !policy.disabledTools.has(name)));
