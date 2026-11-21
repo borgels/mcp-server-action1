@@ -51,7 +51,7 @@ license as the project, the Functional Source License, Version 1.1, ALv2
 Future License (FSL-1.1-ALv2, see [LICENSE](LICENSE)), including its
 conversion to the Apache License 2.0 two years after each release.
 
-You also grant Borgels Olsen Holding ApS a perpetual, worldwide, non-exclusive,
+You also grant Borgels Services ApS a perpetual, worldwide, non-exclusive,
 royalty-free and irrevocable right to use, modify and relicense your
 contribution under other license terms, so the project's license can be
 changed in the future. You confirm that you have the right to grant this.
