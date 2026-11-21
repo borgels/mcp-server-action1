@@ -1,4 +1,5 @@
 import { fixedOutputs } from '../fallbacks.js';
+import { requestIdFrom, vendorRequestId } from './failure.js';
 import { leaksSecret } from '../key-admission.js';
 import { SecretRedactor } from '../upstream-http.js';
 
@@ -38,12 +39,29 @@ export type QueryValue = string | number | boolean | null | undefined;
 /** An HTTP error from Action1, in our own words: the status, our hint and a whole-number retry-after only. */
 export class Action1GatewayHttpError extends Error {
   readonly status: number;
-  constructor(status: number, hint: string | undefined, retryAfter: string | undefined) {
+  /** Action1's own id for the request, when a response header gives one as a UUID or hex id (src/gateway/failure.ts). */
+  readonly requestId?: string;
+  constructor(status: number, hint: string | undefined, retryAfter: string | undefined, requestId?: string) {
     super(
       `Action1 API request failed with HTTP ${status}${hint ? `. ${hint}` : ''}${retryAfter ? ` Retry after ${retryAfter} s.` : ''}`,
     );
     this.name = 'Action1HttpError';
     this.status = status;
+    const id = vendorRequestId(requestId);
+    if (id !== undefined) this.requestId = id;
+  }
+}
+
+/** A redirect Action1 answered with, refused: our own text (never the Location), the status and request id kept. */
+export class Action1GatewayRedirectError extends Error {
+  readonly status: number;
+  readonly requestId?: string;
+  constructor(status: number, method: string, requestId?: string) {
+    super(`Action1 API responded with a redirect (HTTP ${status}) for ${method}; redirects are not followed.`);
+    this.name = 'Action1RedirectError';
+    this.status = status;
+    const id = vendorRequestId(requestId);
+    if (id !== undefined) this.requestId = id;
   }
 }
 
@@ -207,6 +225,7 @@ export class Action1GatewayClient {
         response.status,
         Object.hasOwn(TOKEN_HINTS, response.status) ? TOKEN_HINTS[response.status] : 'Action1 did not issue an access token.',
         wholeNumber(response.headers.get('retry-after')),
+        requestIdFrom(response.headers),
       );
     }
     const body = (await this.readJson(response, 'POST')) as { access_token?: unknown; refresh_token?: unknown; expires_in?: unknown } | null;
@@ -250,6 +269,7 @@ export class Action1GatewayClient {
         response.status,
         Object.hasOwn(STATUS_HINTS, response.status) ? STATUS_HINTS[response.status] : undefined,
         wholeNumber(response.headers.get('retry-after')),
+        requestIdFrom(response.headers),
       );
     }
     const data = await this.readJson(response, method);
@@ -268,7 +288,7 @@ export class Action1GatewayClient {
     }
     if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
       await discard(response);
-      throw new Error(`Action1 API responded with a redirect (HTTP ${response.status}) for ${method}; redirects are not followed.`);
+      throw new Action1GatewayRedirectError(response.status, method, requestIdFrom(response.headers));
     }
     return response;
   }

@@ -69,6 +69,15 @@ const UPDATE = {
   versions: [{ id: 'ver-1', version: '1.2.3', approval_status: 'New', security_severity: 'Critical', binary_id: { Windows_64: 'x' }, silent_install_switches: '/S' }],
 };
 
+const SCHEDULE = {
+  id: 'auto-1',
+  name: 'Weekly cleanup',
+  settings: 'ENABLED',
+  retry_minutes: '480',
+  endpoints: [{ id: 'g-1', type: 'EndpointGroup', name: 'Sales' }],
+  actions: [{ id: 'Run_Command_1', name: 'Run Command', template_id: 'run_script', params: { script_text: 'Remove-Item C:\\temp\\* -Recurse', password: 'p4ssw0rd-in-script' } }],
+};
+
 /** An Action1 that answers the token request and every documented read with sample data. */
 function action1(overrides: Record<string, () => Response> = {}) {
   return vi.fn<typeof fetch>(async (url, init) => {
@@ -91,6 +100,14 @@ function action1(overrides: Record<string, () => Response> = {}) {
     if (key === 'GET /vulnerabilities/org-1/CVE-2026-1234/endpoints') return json({ total_items: 1, items: [{ endpoint_id: 'ep-1', endpoint_name: 'Laptop 7', user: 'jdoe', OS: 'Windows' }] });
     if (key === 'GET /vulnerabilities/org-1/CVE-2026-1234/remediations') return json({ total_items: 1, items: [{ remediation_id: 'r-1', product_name: 'X', remediated_by: { id: 'u-1', display_name: 'Admin', email: 'admin@example.com' } }] });
     if (key.startsWith('GET /installed-software/org-1/data')) return json({ total_items: 1, items: [{ id: 'row-1', fields: { Name: 'Example Browser', Version: '1.2.0', 'Installed For': 'jdoe', 'Install Location': 'C:\\x' }, drilldown: '/x' }] });
+    if (key === 'GET /automations/schedules/org-1') return json({ total_items: 1, items: [SCHEDULE] });
+    if (key === 'GET /automations/schedules/org-1/auto-1') return json(SCHEDULE);
+    if (key === 'GET /automations/instances/org-1') return json({ total_items: 1, items: [{ id: 'run-1', name: 'Weekly cleanup', status: 'Completed', actions: SCHEDULE.actions }] });
+    if (key === 'GET /automations/instances/org-1/run-1') return json({ id: 'run-1', name: 'Weekly cleanup', status: 'Completed' });
+    if (key === 'GET /automations/instances/org-1/run-1/endpoint-results') return json({ total_items: 1, items: [{ endpoint_id: 'ep-1', endpoint_name: 'Laptop 7', status: 'Success', output: 'secret output', address: '10.0.0.1' }] });
+    if (key === 'POST /automations/instances/org-1') return json({ id: 'run-2', name: 'started', status: 'Running', self: '/x' });
+    if (key === 'GET /software-repository/org-1') return json({ total_items: 1, items: [{ id: 'sw-1', name: 'Example Editor', vendor: 'Example Inc.', install_switches: '/S', versions: [{ id: 'v-1', version: '2.0', binary_id: 'b' }] }] });
+    if (key === 'GET /software-repository/org-1/sw-1') return json({ id: 'sw-1', name: 'Example Editor', versions: [{ id: 'v-1', version: '2.0', file_name: 'x.exe' }] });
     if (key === 'GET /reports/all') return json({ total_items: 1, items: [{ id: 'rep-1', name: 'Missing updates', report_data: '/x' }] });
     if (key === 'GET /reportdata/org-1/rep-1/data') return json({ total_items: 1, items: [{ id: 'r', fields: { Endpoint: 'Laptop 7', 'IP Address': '10.0.0.1', MAC: 'aa', 'Serial Number': 'SN', Email: 'a@example.com', Updates: '3', Nested: { x: 1 } } }] });
     return json({ developer_message: 'not here' }, 404);
@@ -133,19 +150,30 @@ const CALLS: Record<string, GatewayJsonObject[]> = {
   get_installed_software: [{ orgId: 'org-1' }, { orgId: 'org-1', endpointId: 'ep-1' }],
   list_reports: [{}],
   get_report_data: [{ orgId: 'org-1', reportId: 'rep-1' }],
+  list_automations: [
+    { orgId: 'org-1', kind: 'schedules' },
+    { orgId: 'org-1', kind: 'schedules', automationId: 'auto-1' },
+    { orgId: 'org-1', kind: 'instances' },
+    { orgId: 'org-1', kind: 'instances', automationId: 'run-1' },
+    { orgId: 'org-1', kind: 'instances', automationId: 'run-1', endpointResults: true },
+  ],
+  list_software_repository: [{ orgId: 'org-1' }, { orgId: 'org-1', packageId: 'sw-1' }],
   set_update_approvals: [{ orgId: 'org-1', approvalStatus: 'Approved', packages: [{ packageId: 'pkg-1', versionId: 'ver-1' }] }],
+  deploy_updates: [{ orgId: 'org-1', targets: [{ type: 'endpoint', id: 'ep-1' }], packages: [{ packageId: 'pkg-1', version: '1.2.3' }] }],
+  deploy_software: [{ orgId: 'org-1', targets: [{ type: 'group', id: 'g-1' }], packages: [{ packageId: 'sw-1', version: '2.0' }] }],
+  run_automation: [{ orgId: 'org-1', automationId: 'auto-1' }],
 };
 
 describe('Action1 gateway surface', () => {
-  it('has the agreed tool set: reads enabled by default, one write, nothing broad, nothing that runs or deletes', () => {
+  it('has the agreed tool set: reads enabled by default, the everyday writes, nothing broad, nothing that writes scripts or deletes', () => {
     expect(action1GatewayTools.map(tool => tool.name)).toEqual(Object.keys(CALLS));
     const writes = action1ToolCatalog.filter(tool => tool.riskLevel !== 'read');
-    expect(writes.map(tool => tool.name)).toEqual(['set_update_approvals']);
+    expect(writes.map(tool => tool.name)).toEqual(['set_update_approvals', 'deploy_updates', 'deploy_software', 'run_automation']);
     expect(writes.every(tool => tool.riskLevel === 'write' && !tool.enabledByDefault)).toBe(true);
     expect(action1ToolCatalog.filter(tool => tool.riskLevel === 'read').every(tool => tool.enabledByDefault)).toBe(true);
     expect(action1ToolCatalog.some(tool => tool.broad)).toBe(false);
     const all = JSON.stringify(action1ToolCatalog.map(tool => [tool.name, tool.upstream]));
-    for (const word of ['script', 'automation', 'software-repository', 'reboot', 'install"', 'uninstall', 'delete', 'remote-session', 'audit']) {
+    for (const word of ['/scripts', 'uninstall', 'delete', 'remote-session', 'audit', '/policies', '/endpoints/managed/{orgId}/{endpointId}/']) {
       expect(all.toLowerCase()).not.toContain(word);
     }
     for (const tool of action1ToolCatalog) {
@@ -567,7 +595,7 @@ describe('Action1 gateway input and policy', () => {
     expect(unknownField.content[0]!.text).toMatch(/^Invalid input for list_organizations/);
     const badApproval = await g.callTool('set_update_approvals', { orgId: 'org-1', approvalStatus: 'Approved', packages: [{ id: 'x', version: '1', approval_status: 'Approved' }] });
     expect(badApproval.isError).toBe(true);
-    for (const name of ['run_script', 'list_scripts', 'list_automations', 'list_software_repository', 'get_audit_log', 'action1_run_script', 'nope']) {
+    for (const name of ['run_script', 'list_scripts', 'reboot_endpoint', 'get_audit_log', 'action1_run_script', 'nope']) {
       expect((await g.callTool(name, {})).content[0]!.text).toBe('Unsupported Action1 gateway tool.');
     }
     expect((await g.callTool('ACTION1_LIST_ORGANIZATIONS', {})).isError).toBeUndefined();

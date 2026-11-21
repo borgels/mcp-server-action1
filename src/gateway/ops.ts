@@ -392,3 +392,231 @@ export async function setUpdateApprovals(
       : packages,
   };
 }
+
+// --- Everyday IT work: automations, the software repository and deployments ---
+
+/** The targets of an automation, as ids and types only: never filters or the names Action1 resolves them to. */
+const TARGET = projector({ id: plain, type: plain });
+/** An action of an automation: its name and template only. The parameters (script text included) are never returned. */
+const ACTION = projector({ name: plain, template_id: plain });
+const AUTOMATION = projector({
+  id: plain,
+  name: plain,
+  status: plain,
+  settings: plain,
+  retry_minutes: plain,
+  last_run: plain,
+  next_run: plain,
+  start_time: plain,
+  end_time: plain,
+  endpoints: listOf(TARGET),
+  actions: listOf(ACTION),
+});
+const AUTOMATION_RESULT = projector({
+  endpoint_id: plain,
+  endpoint_name: plain,
+  status: plain,
+  start_time: plain,
+  end_time: plain,
+});
+const REPOSITORY_VERSION = projector({
+  id: plain,
+  version: plain,
+  release_date: plain,
+  status: plain,
+  platform: plain,
+  architecture: plain,
+});
+const REPOSITORY_PACKAGE = projector({
+  id: plain,
+  name: plain,
+  vendor: plain,
+  description: plain,
+  platform: plain,
+  builtin: plain,
+  versions: listOf(REPOSITORY_VERSION),
+});
+
+export async function listAutomations(
+  client: Action1GatewayClient,
+  input: PageInput & { orgId: string; kind: 'schedules' | 'instances'; automationId?: string; endpointResults?: boolean },
+): Promise<Json> {
+  const base = `/automations/${input.kind}/${org(input.orgId)}`;
+  if (input.automationId) {
+    const itemPath = `${base}/${idSegment(input.automationId, 'automationId')}`;
+    if (input.endpointResults) {
+      if (input.kind !== 'instances') throw new Error('endpointResults needs kind "instances".');
+      return listPage(client, `${itemPath}/endpoint-results`, input, AUTOMATION_RESULT);
+    }
+    return AUTOMATION(await client.get(itemPath));
+  }
+  if (input.endpointResults) throw new Error('Give automationId with endpointResults.');
+  return listPage(client, base, input, AUTOMATION);
+}
+
+export async function listSoftwareRepository(
+  client: Action1GatewayClient,
+  input: PageInput & { orgId: string; packageId?: string },
+): Promise<Json> {
+  const base = `/software-repository/${org(input.orgId)}`;
+  if (input.packageId) return REPOSITORY_PACKAGE(await client.get(`${base}/${idSegment(input.packageId, 'packageId')}`));
+  return listPage(client, base, input, REPOSITORY_PACKAGE);
+}
+
+export interface TargetInput {
+  type: 'endpoint' | 'group';
+  id: string;
+}
+
+export interface PackageInput {
+  packageId: string;
+  version: string;
+}
+
+/** Most computers and groups one run may name. */
+export const MAX_TARGETS = 50;
+
+/** One organization, never "all": a run or deployment always belongs to one organization. */
+function oneOrg(orgId: string): string {
+  if (orgId.trim().toLowerCase() === 'all') {
+    throw new Error('Give one organization: a run for all organizations at once is refused.');
+  }
+  return org(orgId);
+}
+
+/**
+ * The computers and groups a run is for, named one by one. "All" (the name Action1 gives every computer) is refused as
+ * an id, so a run made here always names its targets.
+ */
+function targets(list: readonly TargetInput[]): Array<{ id: string; type: 'Endpoint' | 'EndpointGroup' }> {
+  if (list.length === 0 || list.length > MAX_TARGETS) throw new Error(`Name between 1 and ${MAX_TARGETS} computers or groups.`);
+  const seen = new Set<string>();
+  return list.map(target => {
+    if (target.id.trim().toLowerCase() === 'all') {
+      throw new Error('Name the computers or groups: "all" is refused as a target.');
+    }
+    const id = decodeURIComponent(idSegment(target.id, target.type === 'group' ? 'groupId' : 'endpointId'));
+    const key = `${target.type}:${id}`;
+    if (seen.has(key)) throw new Error('Each computer or group may be named once.');
+    seen.add(key);
+    return { id, type: target.type === 'group' ? 'EndpointGroup' : 'Endpoint' };
+  });
+}
+
+/** Packages as Action1 takes them in a deployment: one object per package, its id mapped to the version. */
+function packageMap(list: readonly PackageInput[]): Array<Record<string, string>> {
+  const seen = new Set<string>();
+  return list.map(entry => {
+    const id = decodeURIComponent(idSegment(entry.packageId, 'packageId'));
+    if (seen.has(id)) throw new Error('Each package may be named once.');
+    seen.add(id);
+    return { [id]: entry.version };
+  });
+}
+
+/** The run Action1 started, by id, name and status only. */
+const RUN = projector({ id: plain, name: plain, status: plain });
+
+/** UTC to the minute, in the name of a run: two runs on the same day can be told apart in Action1. */
+function stamp(): string {
+  return new Date().toISOString().slice(0, 16).replace('T', ' ');
+}
+
+const REBOOT_NO = { auto_reboot: 'no' };
+/** Action1's own reboot settings for an update deployment that may restart: the user is warned and has four hours. */
+const REBOOT_WITH_WARNING = {
+  auto_reboot: 'yes',
+  show_message: 'yes',
+  message_text:
+    'Your computer requires maintenance and will be rebooted. Please save all work and reboot now to avoid losing any data.',
+  timeout: 240,
+};
+
+export async function deployUpdates(
+  client: Action1GatewayClient,
+  input: { orgId: string; targets: TargetInput[]; packages: PackageInput[]; allowReboot?: boolean },
+): Promise<Json> {
+  const path = `/automations/instances/${oneOrg(input.orgId)}`;
+  const endpoints = targets(input.targets);
+  const packages = packageMap(input.packages);
+  const raw = await client.post(path, {
+    name: `Deploy updates ${stamp()}`,
+    retry_minutes: '1440',
+    endpoints,
+    actions: [
+      {
+        name: 'Deploy Update',
+        template_id: 'deploy_update',
+        params: {
+          display_summary: 'Updates deployed through the gateway.',
+          packages,
+          update_approval: 'manual',
+          scope: 'Specified',
+          reboot_options: input.allowReboot ? REBOOT_WITH_WARNING : REBOOT_NO,
+        },
+      },
+    ],
+  });
+  return { ...RUN(raw), targets: endpoints.length, packages: packages.length, allowReboot: input.allowReboot === true };
+}
+
+export async function deploySoftware(
+  client: Action1GatewayClient,
+  input: { orgId: string; targets: TargetInput[]; packages: PackageInput[] },
+): Promise<Json> {
+  const path = `/automations/instances/${oneOrg(input.orgId)}`;
+  const endpoints = targets(input.targets);
+  const packages = packageMap(input.packages);
+  const raw = await client.post(path, {
+    name: `Deploy software ${stamp()}`,
+    retry_minutes: '1440',
+    endpoints,
+    actions: [
+      {
+        name: 'Deploy Software',
+        template_id: 'deploy_package',
+        params: {
+          display_summary: 'Software deployed through the gateway.',
+          packages,
+          reboot_options: REBOOT_NO,
+        },
+      },
+    ],
+  });
+  return { ...RUN(raw), targets: endpoints.length, packages: packages.length };
+}
+
+/**
+ * Runs an automation an Action1 administrator has already set up, now, as a new run with the automation's own actions.
+ * The actions go back to Action1 exactly as Action1 gave them and are never returned; nothing here writes a script or
+ * an action. The run is for the computers and groups named in `targets`, or, without them, for the automation's own.
+ */
+export async function runAutomation(
+  client: Action1GatewayClient,
+  input: { orgId: string; automationId: string; targets?: TargetInput[] },
+): Promise<Json> {
+  const orgSegment = oneOrg(input.orgId);
+  const chosen = input.targets === undefined ? undefined : targets(input.targets);
+  const schedule = asObject(await client.get(`/automations/schedules/${orgSegment}/${idSegment(input.automationId, 'automationId')}`));
+  const actions = schedule?.actions;
+  if (!schedule || !Array.isArray(actions) || actions.length === 0) {
+    throw new Error('The automation has no actions to run.');
+  }
+  const own = Array.isArray(schedule.endpoints) ? schedule.endpoints : [];
+  const endpoints = chosen ?? own;
+  if (endpoints.length === 0) throw new Error('The automation has no computers or groups; name them in targets.');
+  const name = typeof schedule.name === 'string' && schedule.name.trim() !== '' ? schedule.name.slice(0, 150) : 'Automation';
+  const retry = schedule.retry_minutes;
+  const raw = await client.post(`/automations/instances/${orgSegment}`, {
+    name: `${name} (run now ${stamp()})`,
+    retry_minutes: typeof retry === 'string' || typeof retry === 'number' ? String(retry) : '1440',
+    endpoints,
+    actions,
+  });
+  return {
+    ...RUN(raw),
+    automationId: input.automationId,
+    actions: actions.map(ACTION),
+    ...(chosen ? { targets: chosen.length } : { targets: 'automation', automationTargets: own.length }),
+  };
+}
