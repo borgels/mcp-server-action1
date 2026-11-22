@@ -10,7 +10,7 @@ const SCHEDULE = {
   id: 'auto-1',
   name: 'Weekly cleanup',
   retry_minutes: '480',
-  endpoints: [{ id: 'g-1', type: 'EndpointGroup' }],
+  endpoints: [{ id: 'ep-1', type: 'Endpoint' }],
   actions: [{ id: 'Run_Command_1', name: 'Run Command', template_id: 'run_script', params: { script_text: SCRIPT } }],
 };
 
@@ -61,13 +61,13 @@ describe('Action1 gateway everyday work', () => {
     const g = gateway(fetchImpl);
     const result = await g.callTool('deploy_updates', {
       orgId: 'org-1',
-      targets: [{ type: 'endpoint', id: 'ep-1' }, { type: 'group', id: 'g-1' }],
+      targets: [{ type: 'endpoint', id: 'ep-1' }, { type: 'endpoint', id: 'ep-2' }],
       packages: [{ packageId: 'pkg-1', version: '1.2.3' }],
     });
     expect(result.isError).toBeUndefined();
     expect(result.structuredContent).toMatchObject({ id: 'run-2', status: 'Running', targets: 2, packages: 1, allowReboot: false });
     const [body] = posted(fetchImpl) as Array<Record<string, any>>;
-    expect(body!.endpoints).toEqual([{ id: 'ep-1', type: 'Endpoint' }, { id: 'g-1', type: 'EndpointGroup' }]);
+    expect(body!.endpoints).toEqual([{ id: 'ep-1', type: 'Endpoint' }, { id: 'ep-2', type: 'Endpoint' }]);
     expect(body!.actions[0].template_id).toBe('deploy_update');
     expect(body!.actions[0].params.packages).toEqual([{ 'pkg-1': '1.2.3' }]);
     expect(body!.actions[0].params.reboot_options).toEqual({ auto_reboot: 'no' });
@@ -81,7 +81,7 @@ describe('Action1 gateway everyday work', () => {
     const fetchImpl = action1();
     const result = await gateway(fetchImpl).callTool('deploy_software', {
       orgId: 'org-1',
-      targets: [{ type: 'group', id: 'g-1' }],
+      targets: [{ type: 'endpoint', id: 'ep-1' }],
       packages: [{ packageId: 'sw-1', version: '2.0' }],
     });
     expect(result.isError).toBeUndefined();
@@ -113,14 +113,18 @@ describe('Action1 gateway everyday work', () => {
     const pkg = [{ packageId: 'pkg-1', version: '1' }];
     const refused: Array<[string, GatewayJsonObject]> = [
       ['deploy_updates', { orgId: 'all', targets: [{ type: 'endpoint', id: 'ep-1' }], packages: pkg }],
-      ['deploy_updates', { orgId: 'org-1', targets: [{ type: 'group', id: 'ALL' }], packages: pkg }],
+      ['deploy_updates', { orgId: 'org-1', targets: [{ type: 'endpoint', id: 'ALL' }], packages: pkg }],
+      // A group can hold every computer: never a target, in any tool.
+      ['deploy_updates', { orgId: 'org-1', targets: [{ type: 'group', id: 'g-everyone' }], packages: pkg }],
+      ['deploy_software', { orgId: 'org-1', targets: [{ type: 'endpoint', id: 'ep-1' }, { type: 'group', id: 'g-everyone' }], packages: pkg }],
+      ['run_automation', { orgId: 'org-1', automationId: 'auto-1', targets: [{ type: 'group', id: 'g-everyone' }] }],
       ['deploy_updates', { orgId: 'org-1', targets: [{ type: 'endpoint', id: 'ep-1' }, { type: 'endpoint', id: 'ep-1' }], packages: pkg }],
       ['deploy_updates', { orgId: 'org-1', targets: [], packages: pkg }],
       ['deploy_updates', { orgId: 'org-1', targets: Array.from({ length: 51 }, (_, i) => ({ type: 'endpoint', id: `ep-${i}` })), packages: pkg }],
       ['deploy_software', { orgId: 'org-1', targets: [{ type: 'endpoint', id: 'ep-1' }], packages: [...pkg, ...pkg] }],
       ['deploy_software', { orgId: 'org-1', targets: [{ type: 'endpoint', id: '../x' }], packages: pkg }],
       ['run_automation', { orgId: 'all', automationId: 'auto-1' }],
-      ['run_automation', { orgId: 'org-1', automationId: 'auto-1', targets: [{ type: 'group', id: 'all' }] }],
+      ['run_automation', { orgId: 'org-1', automationId: 'auto-1', targets: [{ type: 'endpoint', id: 'all' }] }],
     ];
     for (const [tool, input] of refused) {
       expect((await g.callTool(tool, input)).isError, `${tool} ${JSON.stringify(input).slice(0, 80)}`).toBe(true);
@@ -130,10 +134,13 @@ describe('Action1 gateway everyday work', () => {
     expect(posted(fetchImpl)).toEqual([]);
   });
 
-  it('runs an automation on its own targets only when they are named computers or groups, at most 50, never all', async () => {
+  it('runs an automation on its own targets only when they are named computers, at most 50, never all and never a group', async () => {
     const own = (endpoints: unknown) => () => json({ ...SCHEDULE, endpoints });
     for (const endpoints of [
       [{ id: 'ALL', type: 'EndpointGroup' }],
+      // An ordinary group that holds every computer of the organization.
+      [{ id: 'g-everyone', type: 'EndpointGroup' }],
+      [{ id: 'ep-1', type: 'Endpoint' }, { id: 'g-everyone', type: 'EndpointGroup' }],
       Array.from({ length: 51 }, (_, i) => ({ id: `ep-${i}`, type: 'Endpoint' })),
       [{ id: 'f-1', type: 'Filter' }],
       [{ type: 'Endpoint' }],
@@ -146,9 +153,9 @@ describe('Action1 gateway everyday work', () => {
       expect(posted(fetchImpl)).toEqual([]);
     }
     const fetchImpl = action1({ 'GET /automations/schedules/org-1/auto-1': own([{ id: 'ALL', type: 'EndpointGroup' }]) });
-    const named = await gateway(fetchImpl).callTool('run_automation', { orgId: 'org-1', automationId: 'auto-1', targets: [{ type: 'group', id: 'g-2' }] });
+    const named = await gateway(fetchImpl).callTool('run_automation', { orgId: 'org-1', automationId: 'auto-1', targets: [{ type: 'endpoint', id: 'ep-2' }] });
     expect(named.isError).toBeUndefined();
-    expect((posted(fetchImpl)[0] as Record<string, any>).endpoints).toEqual([{ id: 'g-2', type: 'EndpointGroup' }]);
+    expect((posted(fetchImpl)[0] as Record<string, any>).endpoints).toEqual([{ id: 'ep-2', type: 'Endpoint' }]);
   });
 
   it('shows the host warning before a restart, and refuses one that is not printable', async () => {
@@ -165,7 +172,7 @@ describe('Action1 gateway everyday work', () => {
     const g = gateway(fetchImpl, false);
     for (const [tool, input] of [
       ['run_automation', { orgId: 'org-1', automationId: 'auto-1' }],
-      ['deploy_software', { orgId: 'org-1', targets: [{ type: 'group', id: 'g-1' }], packages: [{ packageId: 'sw-1', version: '2.0' }] }],
+      ['deploy_software', { orgId: 'org-1', targets: [{ type: 'endpoint', id: 'ep-1' }], packages: [{ packageId: 'sw-1', version: '2.0' }] }],
     ] as Array<[string, GatewayJsonObject]>) {
       const result = await g.callTool(tool, input);
       expect(result.isError).toBe(true);
@@ -181,7 +188,7 @@ describe('Action1 gateway failure metadata', () => {
       'GET /automations/schedules/org-1': () => json({}, 500, { 'x-request-id': 'not an id, a sentence' }),
     });
     const g = gateway(fetchImpl);
-    const denied = await g.callTool('deploy_software', { orgId: 'org-1', targets: [{ type: 'group', id: 'g-1' }], packages: [{ packageId: 'sw-1', version: '2.0' }] });
+    const denied = await g.callTool('deploy_software', { orgId: 'org-1', targets: [{ type: 'endpoint', id: 'ep-1' }], packages: [{ packageId: 'sw-1', version: '2.0' }] });
     expect(denied.isError).toBe(true);
     expect(denied.failure).toEqual({ httpStatus: 403, requestId: '0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b' });
     expect(JSON.stringify(denied)).not.toContain('nope');

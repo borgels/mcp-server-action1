@@ -464,7 +464,8 @@ export async function listSoftwareRepository(
 }
 
 export interface TargetInput {
-  type: 'endpoint' | 'group';
+  /** Only computers: a group can hold every computer, so it is never a target of a change here. */
+  type: 'endpoint';
   id: string;
 }
 
@@ -473,7 +474,7 @@ export interface PackageInput {
   version: string;
 }
 
-/** Most computers and groups one run may name. */
+/** Most computers one run may name. */
 export const MAX_TARGETS = 50;
 
 /** One organization, never "all": a run or deployment always belongs to one organization. */
@@ -485,43 +486,48 @@ function oneOrg(orgId: string): string {
 }
 
 /**
- * The computers and groups a run is for, named one by one. "All" (the name Action1 gives every computer) is refused as
- * an id, so a run made here always names its targets.
+ * The computers a run is for, named one by one, at most MAX_TARGETS. Never a group: a group can hold every computer
+ * (or more than MAX_TARGETS), so naming one would get round both limits. "All" (the name Action1 gives every computer)
+ * is refused as an id, so a run made here always names its computers.
  */
-function targets(list: readonly TargetInput[]): Array<{ id: string; type: 'Endpoint' | 'EndpointGroup' }> {
-  if (list.length === 0 || list.length > MAX_TARGETS) throw new Error(`Name between 1 and ${MAX_TARGETS} computers or groups.`);
+function targets(list: readonly TargetInput[]): Array<{ id: string; type: 'Endpoint' }> {
+  if (list.length === 0 || list.length > MAX_TARGETS) throw new Error(`Name between 1 and ${MAX_TARGETS} computers.`);
   const seen = new Set<string>();
   return list.map(target => {
-    if (target.id.trim().toLowerCase() === 'all') {
-      throw new Error('Name the computers or groups: "all" is refused as a target.');
+    if ((target as { type: string }).type !== 'endpoint') {
+      throw new Error('Name the computers one by one: a group is refused as a target, because it can hold every computer.');
     }
-    const id = decodeURIComponent(idSegment(target.id, target.type === 'group' ? 'groupId' : 'endpointId'));
-    const key = `${target.type}:${id}`;
-    if (seen.has(key)) throw new Error('Each computer or group may be named once.');
-    seen.add(key);
-    return { id, type: target.type === 'group' ? 'EndpointGroup' : 'Endpoint' };
+    if (target.id.trim().toLowerCase() === 'all') {
+      throw new Error('Name the computers: "all" is refused as a target.');
+    }
+    const id = decodeURIComponent(idSegment(target.id, 'endpointId'));
+    if (seen.has(id)) throw new Error('Each computer may be named once.');
+    seen.add(id);
+    return { id, type: 'Endpoint' };
   });
 }
 
 /**
  * The targets of an automation as an administrator set them up, held to the same rules as named targets: each a
- * computer or group by a valid id, at most MAX_TARGETS, none twice, and never "all". An automation set up for every
- * computer, for more than MAX_TARGETS, or with targets of another kind (filters) is not run on its own targets: the
- * targets must then be named.
+ * computer by a valid id, at most MAX_TARGETS, none twice, and never "all". An automation set up for every computer,
+ * for a group, for more than MAX_TARGETS, or with targets of another kind (filters) is not run on its own targets: the
+ * computers must then be named.
  */
-function ownTargets(value: unknown): Array<{ id: string; type: 'Endpoint' | 'EndpointGroup' }> {
+function ownTargets(value: unknown): Array<{ id: string; type: 'Endpoint' }> {
   const list = Array.isArray(value) ? value : [];
   const named: TargetInput[] = list.map(entry => {
     const target = asObject(entry);
-    const type = target?.type === 'Endpoint' ? 'endpoint' : target?.type === 'EndpointGroup' ? 'group' : undefined;
-    if (!target || type === undefined || typeof target.id !== 'string') {
-      throw new Error('The automation has targets that are not computers or groups; name them in targets.');
+    if (target?.type === 'EndpointGroup') {
+      throw new Error('The automation is set up for a group, which can hold every computer; name the computers in targets.');
     }
-    return { type, id: target.id };
+    if (!target || target.type !== 'Endpoint' || typeof target.id !== 'string') {
+      throw new Error('The automation has targets that are not computers; name them in targets.');
+    }
+    return { type: 'endpoint', id: target.id };
   });
-  if (named.length === 0) throw new Error('The automation has no computers or groups; name them in targets.');
+  if (named.length === 0) throw new Error('The automation has no computers; name them in targets.');
   if (named.some(target => target.id.trim().toLowerCase() === 'all')) {
-    throw new Error('The automation is set up for every computer; name the computers or groups in targets.');
+    throw new Error('The automation is set up for every computer; name the computers in targets.');
   }
   if (named.length > MAX_TARGETS) throw new Error(`The automation has more than ${MAX_TARGETS} targets; name them in targets.`);
   return targets(named);

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1 (2026-11-22)
+
+- Gateway: `deploy_updates`, `deploy_software` and `run_automation` take only named computers as targets, never a
+  group: a group can hold every computer (or more than 50), so naming one got round both limits. An automation set up
+  for a group is run only on named computers.
+
 ## 0.6.0
 
 ### Added

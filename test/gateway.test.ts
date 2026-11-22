@@ -74,7 +74,7 @@ const SCHEDULE = {
   name: 'Weekly cleanup',
   settings: 'ENABLED',
   retry_minutes: '480',
-  endpoints: [{ id: 'g-1', type: 'EndpointGroup', name: 'Sales' }],
+  endpoints: [{ id: 'ep-1', type: 'Endpoint', name: 'PC-01' }],
   actions: [{ id: 'Run_Command_1', name: 'Run Command', template_id: 'run_script', params: { script_text: 'Remove-Item C:\\temp\\* -Recurse', password: 'p4ssw0rd-in-script' } }],
 };
 
@@ -160,7 +160,7 @@ const CALLS: Record<string, GatewayJsonObject[]> = {
   list_software_repository: [{ orgId: 'org-1' }, { orgId: 'org-1', packageId: 'sw-1' }],
   set_update_approvals: [{ orgId: 'org-1', approvalStatus: 'Approved', packages: [{ packageId: 'pkg-1', versionId: 'ver-1' }] }],
   deploy_updates: [{ orgId: 'org-1', targets: [{ type: 'endpoint', id: 'ep-1' }], packages: [{ packageId: 'pkg-1', version: '1.2.3' }] }],
-  deploy_software: [{ orgId: 'org-1', targets: [{ type: 'group', id: 'g-1' }], packages: [{ packageId: 'sw-1', version: '2.0' }] }],
+  deploy_software: [{ orgId: 'org-1', targets: [{ type: 'endpoint', id: 'ep-1' }], packages: [{ packageId: 'sw-1', version: '2.0' }] }],
   run_automation: [{ orgId: 'org-1', automationId: 'auto-1' }],
 };
 

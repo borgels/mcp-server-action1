@@ -28,7 +28,7 @@ import { currentInstancePolicy, currentOfferedTools, TOOL_PREFIX } from './scope
  * definition, the strict input schema, the Action1 requests each tool may
  * make and the handler. Reads, and the everyday changes of an IT
  * administrator: approving or declining updates, deploying updates or a
- * package from the software repository to named computers and groups, and
+ * package from the software repository to named computers, and
  * running an automation an Action1 administrator has already set up. No tool
  * writes a script or an action, removes software, opens a remote session,
  * changes settings, users or roles, or deletes. A run always belongs to one
@@ -76,13 +76,13 @@ const oneOrgId = id('Organization id from list_organizations (one organization, 
 const targetList = z
   .array(
     z.strictObject({
-      type: z.enum(['endpoint', 'group']).describe('A computer (id from list_endpoints) or a group (id from list_endpoint_groups).'),
-      id: id('Endpoint or group id.'),
+      type: z.enum(['endpoint']).describe('A computer (id from list_endpoints). Groups are not targets: a group can hold every computer.'),
+      id: id('Endpoint id.'),
     }),
   )
   .min(1)
   .max(MAX_TARGETS)
-  .describe('The computers and groups, named one by one.');
+  .describe('The computers, named one by one (list_endpoint_groups with members gives a group\'s computers).');
 const packageList = (from: string) =>
   z
     .array(
@@ -322,7 +322,7 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = defineTools([
     name: 'deploy_updates',
     title: 'Deploy Action1 updates',
     description:
-      'Install missing updates now on named computers or groups in one organization (at most 50), as an Action1 run. Package ids and versions come from list_updates. The computers do not restart unless allowReboot is true; then Action1 warns the user and restarts after four hours if needed. "all" is refused as organization and as target.',
+      'Install missing updates now on named computers in one organization (at most 50), as an Action1 run. Package ids and versions come from list_updates. The computers do not restart unless allowReboot is true; then Action1 warns the user and restarts after four hours if needed. "all" is refused as organization and as target.',
     riskLevel: 'write',
     summary: 'Action1 update deployment started.',
     upstream: [TOKEN, post('/automations/instances/{orgId}')],
@@ -338,7 +338,7 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = defineTools([
     name: 'deploy_software',
     title: 'Deploy Action1 software',
     description:
-      'Install a package from the software repository now on named computers or groups in one organization (at most 50), as an Action1 run, without restarting them. Package ids and versions come from list_software_repository. "all" is refused as organization and as target.',
+      'Install a package from the software repository now on named computers in one organization (at most 50), as an Action1 run, without restarting them. Package ids and versions come from list_software_repository. "all" is refused as organization and as target.',
     riskLevel: 'write',
     summary: 'Action1 software deployment started.',
     upstream: [TOKEN, post('/automations/instances/{orgId}')],
@@ -349,14 +349,14 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = defineTools([
     name: 'run_automation',
     title: 'Run Action1 automation now',
     description:
-      'Run an automation an Action1 administrator has already set up (kind=schedules in list_automations), now, with its own actions, which may run scripts, deploy software or restart computers. Without targets it runs on the computers and groups of the automation; with targets only on those (at most 50). Nothing here writes a script or an action. One organization, never "all".',
+      'Run an automation an Action1 administrator has already set up (kind=schedules in list_automations), now, with its own actions, which may run scripts, deploy software or restart computers. Without targets it runs on the computers of the automation (refused when it is set up for all computers, a group or more than 50); with targets only on those computers (at most 50). Nothing here writes a script or an action. One organization, never "all".',
     riskLevel: 'write',
     summary: 'Action1 automation run started.',
     upstream: [TOKEN, get('/automations/schedules/{orgId}/{automationId}'), post('/automations/instances/{orgId}')],
     schema: z.strictObject({
       orgId: oneOrgId,
       automationId: id('Automation id from list_automations (kind=schedules).'),
-      targets: targetList.optional().describe('Only these computers and groups instead of those of the automation.'),
+      targets: targetList.optional().describe('Only these computers instead of those of the automation.'),
     }),
     run: (client, input) => runAutomation(client, input as never),
   },
