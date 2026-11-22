@@ -4,6 +4,7 @@ import { fixedOutputs, withheldResult } from './fallbacks.js';
 import { admitsKey, KEY_REFUSED, leaksSecret, maskedText, sealedError } from './key-admission.js';
 import { redactDeep, redactText } from './redaction.js';
 import { writeGatewayAuditEvent } from './gateway/audit.js';
+import { failureInForm, failureMetadata, type FailureMetadata } from './gateway/failure.js';
 import { Action1GatewayClient, ACTION1_REGIONS, UNSAFE_TOKEN, type Action1Region } from './gateway/client.js';
 import {
   canonicalToolName,
@@ -69,10 +70,19 @@ export interface GatewayToolDefinition {
   inputSchema: GatewayJsonObject;
 }
 
+/**
+ * Metadata about a failed call, on an error result whose cause is known: the HTTP status Action1 answered with, and
+ * Action1's own request id when a response header gives one as a UUID or hex id. For a host that counts failures
+ * without reading their text. Never the response body, Action1's error code or message, or the input.
+ */
+export type GatewayFailure = FailureMetadata;
+
 export interface GatewayToolResult {
   content: Array<{ type: 'text'; text: string }>;
   structuredContent?: GatewayJsonValue;
   isError?: boolean;
+  /** On an error result from Action1's API only: its HTTP status and request id (see GatewayFailure). */
+  failure?: GatewayFailure;
 }
 
 /** Who and which request a call belongs to; written to the audit records of the call. */
@@ -118,6 +128,11 @@ export interface Action1GatewayOptions {
   fetchImpl?: typeof fetch;
   /** Time limit per Action1 request in milliseconds. Default 30 seconds; never read from the environment. */
   timeoutMs?: number;
+  /**
+   * The text Action1 shows on a computer before deploy_updates restarts it (allowReboot), for example in the
+   * language of the company. 1-500 printable characters; Action1's own English text when left out.
+   */
+  rebootMessage?: string;
   /**
    * Instance policy from the host. Without it the instance uses the default
    * policy (no writes, no disabled tools, no audit records); it never reads
@@ -307,7 +322,10 @@ export function createAction1Gateway(options: Action1GatewayOptions) {
 
 function buildAction1Gateway(options: Action1GatewayOptions, clientId: string, clientSecret: string, redactor: InstanceRedactor) {
   // Only these options are read; anything else a host passes is dropped.
-  const { policy: hostPolicy, fetchImpl, timeoutMs } = options;
+  const { policy: hostPolicy, fetchImpl, timeoutMs, rebootMessage } = options;
+  if (rebootMessage !== undefined && (typeof rebootMessage !== 'string' || !/^[^\u0000-\u001f\u007f]{1,500}$/u.test(rebootMessage.trim()))) {
+    throw new GatewayConfigError('options.rebootMessage must be 1-500 printable characters.');
+  }
   const region = requiredRegion(options);
   if (fetchImpl !== undefined && typeof fetchImpl !== 'function') {
     throw new GatewayConfigError('options.fetchImpl must be a function.');
@@ -321,6 +339,7 @@ function buildAction1Gateway(options: Action1GatewayOptions, clientId: string, c
     timeoutMs: timeoutMs ?? DEFAULT_TIMEOUT_MS,
     redactor,
     redactWhole: value => void redactor.addWhole(value),
+    ...(rebootMessage !== undefined ? { rebootMessage: rebootMessage.trim() } : {}),
     ...(fetchImpl ? { fetchImpl } : {}),
   });
   const offeredTools: ReadonlySet<string> = new Set(GATEWAY_TOOL_NAMES.filter(name => !policy.disabledTools.has(name)));
@@ -343,7 +362,7 @@ function buildAction1Gateway(options: Action1GatewayOptions, clientId: string, c
             // The last step but one: an instance an unsafe token closed meanwhile (another call's token request, while
             // this one waited for its audit) passes nothing on, not even an answer it already read.
             if (client.closed) return errorResult(UNSAFE_TOKEN);
-            const final = result.isError ? (redactDeep(result, redactor) as GatewayToolResult) : result;
+            const final = result.isError ? withFailureInForm(redactDeep(result, redactor) as GatewayToolResult) : result;
             // The sink check, as the very last step: a result that holds a piece of a secret anywhere is withheld whole.
             return leaksSecret(final, redactor) ? withheldResult() : final;
           }),
@@ -368,7 +387,7 @@ function buildAction1Gateway(options: Action1GatewayOptions, clientId: string, c
       const data = await runGatewayTool(tool, client, parsed.data as Record<string, unknown>);
       return jsonResult(tool.summary, redactDeep(redactDeep(data, redactor), redactor));
     } catch (error) {
-      return errorResult(redactText(error instanceof Error ? error.message : String(error), redactor));
+      return errorResult(redactText(error instanceof Error ? error.message : String(error), redactor), failureMetadata(error));
     }
   }
 }
@@ -388,6 +407,13 @@ function jsonResult(text: string, structuredContent: unknown): GatewayToolResult
   return { content: [{ type: 'text', text: `${text}\n\n${JSON.stringify(data)}` }], structuredContent: data };
 }
 
-function errorResult(text: string): GatewayToolResult {
-  return { isError: true, content: [{ type: 'text', text }] };
+function errorResult(text: string, failure?: GatewayFailure): GatewayToolResult {
+  return { isError: true, content: [{ type: 'text', text }], ...(failure ? { failure } : {}) };
+}
+
+/** The failure metadata after redaction, in form or dropped (src/gateway/failure.ts). */
+function withFailureInForm(result: GatewayToolResult): GatewayToolResult {
+  const { failure, ...rest } = result;
+  const kept = failureInForm(result.isError, failure);
+  return kept ? { ...rest, failure: kept } : rest;
 }

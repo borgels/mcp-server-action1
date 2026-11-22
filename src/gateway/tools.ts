@@ -14,17 +14,29 @@ import {
   listUpdates,
   listVulnerabilities,
   setUpdateApprovals,
+  listAutomations,
+  listSoftwareRepository,
+  deployUpdates,
+  deploySoftware,
+  runAutomation,
+  MAX_TARGETS,
 } from './ops.js';
 import { currentInstancePolicy, currentOfferedTools, TOOL_PREFIX } from './scope.js';
 
 /**
  * The tools of the embedded gateway (src/gateway.ts): one table with the
  * definition, the strict input schema, the Action1 requests each tool may
- * make and the handler. Reads only, and one change: approving or declining
- * updates. Nothing runs a script, installs or removes software, reboots a
- * machine or deletes; scripts, automations and the software repository are
- * not offered. The MCP server's own tools (src/tools/action1.ts) are
- * unchanged.
+ * make and the handler. Reads, and the everyday changes of an IT
+ * administrator: approving or declining updates, deploying updates or a
+ * package from the software repository to named computers and groups, and
+ * running an automation an Action1 administrator has already set up. No tool
+ * writes a script or an action, removes software, opens a remote session,
+ * changes settings, users or roles, or deletes. A run always belongs to one
+ * organization and names its targets ("all" is refused), except
+ * run_automation without targets, which uses the automation's own. The host
+ * decides per role who gets which tool; every change is a `write` tool, off
+ * unless the host's policy enables writes. The MCP server's own tools
+ * (src/tools/action1.ts) are unchanged.
  */
 
 export type GatewayRiskLevel = 'read' | 'write' | 'destructive';
@@ -60,6 +72,27 @@ const pageShape = {
   from: z.number().int().min(0).max(1_000_000).optional().describe('Offset: the nextFrom of the previous page.'),
 };
 const status3 = z.enum(['SUCCESS', 'WARNING', 'ERROR']);
+const oneOrgId = id('Organization id from list_organizations (one organization, not "all").');
+const targetList = z
+  .array(
+    z.strictObject({
+      type: z.enum(['endpoint', 'group']).describe('A computer (id from list_endpoints) or a group (id from list_endpoint_groups).'),
+      id: id('Endpoint or group id.'),
+    }),
+  )
+  .min(1)
+  .max(MAX_TARGETS)
+  .describe('The computers and groups, named one by one.');
+const packageList = (from: string) =>
+  z
+    .array(
+      z.strictObject({
+        packageId: id(`Package id from ${from}.`),
+        version: z.string().trim().min(1).max(100).describe(`The version as ${from} shows it.`),
+      }),
+    )
+    .min(1)
+    .max(50);
 
 const defineTools = (tools: GatewayTool[]): GatewayTool[] => tools;
 
@@ -228,6 +261,41 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = defineTools([
     run: (client, input) => getReportData(client, input as never),
   },
   {
+    name: 'list_automations',
+    title: 'List Action1 automations',
+    description:
+      'Automations an administrator has set up (kind=schedules) or their runs (kind=instances): id, name, status, schedule, last and next run, targets (ids and types) and action names and templates. Never the action parameters (script text included). With automationId one automation or run; with kind=instances and endpointResults the status of the run on each computer.',
+    riskLevel: 'read',
+    summary: 'Action1 automations.',
+    upstream: [
+      TOKEN,
+      get('/automations/schedules/{orgId}'),
+      get('/automations/schedules/{orgId}/{automationId}'),
+      get('/automations/instances/{orgId}'),
+      get('/automations/instances/{orgId}/{automationId}'),
+      get('/automations/instances/{orgId}/{automationId}/endpoint-results'),
+    ],
+    schema: z.strictObject({
+      orgId,
+      kind: z.enum(['schedules', 'instances']),
+      automationId: id('Automation or run id from list_automations.').optional(),
+      endpointResults: z.boolean().default(false).describe('With kind=instances and automationId: the status on each computer.'),
+      ...pageShape,
+    }),
+    run: (client, input) => listAutomations(client, input as never),
+  },
+  {
+    name: 'list_software_repository',
+    title: 'List Action1 software repository',
+    description:
+      'Packages in the software repository that can be deployed (id, name, vendor, description, platform, built-in), and with packageId one package with its versions. The package id and version are what deploy_software takes.',
+    riskLevel: 'read',
+    summary: 'Action1 software repository.',
+    upstream: [TOKEN, get('/software-repository/{orgId}'), get('/software-repository/{orgId}/{packageId}')],
+    schema: z.strictObject({ orgId, packageId: id('Package id from list_software_repository.').optional(), ...pageShape }),
+    run: (client, input) => listSoftwareRepository(client, input as never),
+  },
+  {
     name: 'set_update_approvals',
     title: 'Set Action1 update approvals',
     description:
@@ -249,6 +317,48 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = defineTools([
         .max(50),
     }),
     run: (client, input) => setUpdateApprovals(client, input as never),
+  },
+  {
+    name: 'deploy_updates',
+    title: 'Deploy Action1 updates',
+    description:
+      'Install missing updates now on named computers or groups in one organization (at most 50), as an Action1 run. Package ids and versions come from list_updates. The computers do not restart unless allowReboot is true; then Action1 warns the user and restarts after four hours if needed. "all" is refused as organization and as target.',
+    riskLevel: 'write',
+    summary: 'Action1 update deployment started.',
+    upstream: [TOKEN, post('/automations/instances/{orgId}')],
+    schema: z.strictObject({
+      orgId: oneOrgId,
+      targets: targetList,
+      packages: packageList('list_updates'),
+      allowReboot: z.boolean().default(false).describe('Let Action1 restart the computers after warning the user.'),
+    }),
+    run: (client, input) => deployUpdates(client, input as never),
+  },
+  {
+    name: 'deploy_software',
+    title: 'Deploy Action1 software',
+    description:
+      'Install a package from the software repository now on named computers or groups in one organization (at most 50), as an Action1 run, without restarting them. Package ids and versions come from list_software_repository. "all" is refused as organization and as target.',
+    riskLevel: 'write',
+    summary: 'Action1 software deployment started.',
+    upstream: [TOKEN, post('/automations/instances/{orgId}')],
+    schema: z.strictObject({ orgId: oneOrgId, targets: targetList, packages: packageList('list_software_repository') }),
+    run: (client, input) => deploySoftware(client, input as never),
+  },
+  {
+    name: 'run_automation',
+    title: 'Run Action1 automation now',
+    description:
+      'Run an automation an Action1 administrator has already set up (kind=schedules in list_automations), now, with its own actions, which may run scripts, deploy software or restart computers. Without targets it runs on the computers and groups of the automation; with targets only on those (at most 50). Nothing here writes a script or an action. One organization, never "all".',
+    riskLevel: 'write',
+    summary: 'Action1 automation run started.',
+    upstream: [TOKEN, get('/automations/schedules/{orgId}/{automationId}'), post('/automations/instances/{orgId}')],
+    schema: z.strictObject({
+      orgId: oneOrgId,
+      automationId: id('Automation id from list_automations (kind=schedules).'),
+      targets: targetList.optional().describe('Only these computers and groups instead of those of the automation.'),
+    }),
+    run: (client, input) => runAutomation(client, input as never),
   },
 ]);
 
@@ -298,6 +408,10 @@ function auditTarget(input: Record<string, unknown>): unknown {
     reportId: input.reportId,
     approvalStatus: input.approvalStatus,
     packages: input.packages,
+    automationId: input.automationId,
+    kind: input.kind,
+    targets: input.targets,
+    allowReboot: input.allowReboot,
   };
 }
 

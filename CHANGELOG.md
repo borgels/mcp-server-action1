@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.0
+
+### Added
+
+- Gateway: `failure: { httpStatus, requestId? }` on an error result caused by an HTTP error from Action1, a refused
+  redirect or a refused token request, as in mcp-server-template 0.2.1. The request id only as a UUID or hex id, checked
+  again after redaction; never the response body, Action1's text or the input.
+- Gateway: the everyday work of an IT administrator. Reads `list_automations` (no action parameters, no run output) and
+  `list_software_repository`; writes `deploy_updates` (no restart unless `allowReboot`), `deploy_software` (no
+  restart) and `run_automation` (an automation an administrator has set up, run now with its own actions, on its own
+  targets or on named computers and groups). One organization per run, `all` refused as organization and target, at
+  most 50 named targets, each once; an automation's own targets are held to the same rules. The option
+  `rebootMessage` sets the warning Action1 shows before a restart. No tool writes a script or an action. All writes are off unless the host's policy
+  enables writes.
+
+The MCP server's own tools and settings are unchanged.
+
 ## 0.5.0
 
 - License changed from Apache-2.0 to the Functional Source License, Version 1.1,

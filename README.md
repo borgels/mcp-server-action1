@@ -88,9 +88,10 @@ const result = await gateway.callTool('list_endpoints', { orgId }, { caller: use
 - **Credentials.** The client secret passes key admission (printable ASCII, at least 16 characters, no 6-character piece shared with the package's own texts; refused without being quoted). The client id is checked for form and redacted as a whole value. The access and refresh tokens Action1 issues are added to the instance's redactor before use. Every result, error and audit record is redacted, and the sink check withholds any output that still holds a piece of a secret.
 - **Network.** Only the region's API address; redirects are never followed; Action1's response bodies are never read into an error (errors start with `Action1 API request failed with HTTP <status>` and our own hint).
 - **Policy.** `{ enableWrites, disabledTools, audit }` from the host (default: no writes, nothing disabled, no audit). The audit sink gets the caller as an HMAC pseudonym, the ids as a hash and errors as fixed codes; a tool whose start record fails does not run.
+- **Failures.** An error result caused by an HTTP error from Action1 (or a refused redirect) carries `failure: { httpStatus, requestId? }`: the status, and Action1's request id only when a response header gives one as a UUID or hex id. Never the response body, Action1's error text or the input.
 - **Catalog.** `action1ToolCatalog` is deeply frozen and lists, per tool, the definition, `upstream` (every Action1 request it may make, relative to `…/api/3.0`) and `broad` (false for all).
 
-Tools (reads are enabled by default, the one write is not):
+Tools (reads are enabled by default, the writes are not):
 
 | Tool | Kind | What |
 | --- | --- | --- |
@@ -103,9 +104,14 @@ Tools (reads are enabled by default, the one write is not):
 | `list_vulnerabilities` | read | CVEs with score, CISA KEV, remediation status, affected software; affected computers; recorded remediations (who by display name only). |
 | `get_installed_software` | read | Name, vendor, version, platform, number of computers, update status. |
 | `list_reports`, `get_report_data` | read | Reports and their rows: only named inventory, update and vulnerability columns, and never a value that looks like a mail, IP or MAC address (a version column keeps four numbers with dots as a version). |
+| `list_automations` | read | Automations an administrator has set up and their runs: id, name, status, schedule, last and next run, targets (ids and types), action names and templates; the status of a run on each computer. Never the action parameters (script text included) or a run's output. |
+| `list_software_repository` | read | Deployable packages (id, name, vendor, description, platform) and their versions. No install switches or files. |
 | `set_update_approvals` | write | Approve, decline or reset to New update versions in one organization (never `all`). Nothing is installed by the call. |
+| `deploy_updates` | write | Install missing updates now on named computers or groups (1-50) in one organization. No restart unless `allowReboot`; then Action1 warns the user and restarts after four hours if needed. |
+| `deploy_software` | write | Install a package from the software repository now on named computers or groups (1-50) in one organization, without a restart. |
+| `run_automation` | write | Run an automation an Action1 administrator has already set up, now, with its own actions (which may run scripts, deploy software or restart computers), on its own targets or only on named computers or groups (1-50). Its own targets are held to the same rules: an automation set up for every computer, for more than 50 targets or with filters is run only on named targets. |
 
-Nothing in the gateway runs scripts, installs or removes software, reboots machines, opens remote sessions or deletes; scripts, automations, the software repository and the audit log are not offered.
+A run always belongs to one organization; `all` is refused as organization and as target, and every target is a named computer or group (for `run_automation` without targets, the automation's own, checked the same way). `rebootMessage` (option) is the text Action1 shows before `deploy_updates` restarts a computer, for example in the company's language. No tool writes a script or an action: `run_automation` sends the automation's actions back to Action1 as Action1 gave them and never returns them. Nothing in the gateway removes software, opens remote sessions, changes settings, users or roles, or deletes; the script library and the audit log are not offered. Which roles get the writes is the host's decision.
 
 ## Security model
 
